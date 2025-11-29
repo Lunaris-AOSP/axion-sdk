@@ -10,8 +10,6 @@ android_library {
         "src/**/*.kt",
     ],
 
-    resource_dirs: ["res"],
-
     static_libs: [
         "PlatformAnimationLib",
         "PlatformMotionTestingComposeValues",

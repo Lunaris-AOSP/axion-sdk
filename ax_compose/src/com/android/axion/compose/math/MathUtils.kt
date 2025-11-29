@@ -10,7 +10,7 @@ import androidx.compose.ui.unit.dp
 val Number.sdp: Dp
     @Composable get() = (this.toFloat() * LocalContext.current.scaleRatio).dp
     
-fun lerp(start: Float, stop: Float, fraction: Float): Float =
+inline fun lerp(start: Float, stop: Float, fraction: Float): Float =
     start + fraction * (stop - start)
 
 val Context.scaleRatio: Float
