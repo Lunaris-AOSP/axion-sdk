@@ -44,6 +44,8 @@ import androidx.compose.ui.geometry.takeOrElse
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RenderEffect
+import androidx.compose.ui.graphics.asAndroidRenderEffect
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
@@ -82,6 +84,7 @@ import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.toIntSize
 import androidx.compose.ui.unit.toSize
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
+import com.android.axion.blur.glass.AxGlassRenderEffect
 import com.android.axion.blur.model.AxBackdropBlurSettingsModel
 import com.android.axion.blur.model.AxBackdropBlurSettingsSubscription
 import com.android.axion.blur.ui.view.AxViewBackdropBlur
@@ -522,6 +525,9 @@ private class AxBackdropBlurNode(
     private var layer: GraphicsLayer? = null
     private var renderEffect: RenderEffect? = null
     private var renderEffectRadius = -1f
+    private val glassEffect = AxGlassRenderEffect()
+    private var glassRenderEffect: RenderEffect? = null
+    private var glassKey: GlassKey? = null
     private var nativeBackdropBlur: AxViewBackdropBlur? = null
     private var nativeBackdropBlurView: View? = null
     private var settingsValues: AxBackdropBlurSettingsModel? = null
@@ -636,7 +642,7 @@ private class AxBackdropBlurNode(
                 settings.blurRadiusPx
             }
             val blurRadius = if (settings.enabled) requestedBlurRadius else 0f
-            val effect = blurEffect(blurRadius)
+            val blur = blurEffect(blurRadius)
             val tint = resolveColor(style.tint, AxBlurColors.tint(context))
             val fallbackColor = resolveColor(
                 style.fallbackColor,
@@ -653,6 +659,7 @@ private class AxBackdropBlurNode(
                 return
             }
             val blurLayerGeometry = layerGeometry(blurRadius)
+            val effect = resolveGlassEffect(blur, blurLayerGeometry, cornerRadius)
             if (canDrawBackdrop(effect, blurLayerGeometry)) {
                 val targetLayer = layer?.takeUnless { it.isReleased }
                     ?: requireGraphicsContext().createGraphicsLayer().also { layer = it }
@@ -842,6 +849,52 @@ private class AxBackdropBlurNode(
         return renderEffect
     }
 
+    /**
+     * Chains the Liquid Glass refraction shader onto [blur] so it refracts the
+     * blurred backdrop, or returns [blur] unchanged when glass can't apply
+     * (disabled by the kill switch, no rounded corner, or degenerate geometry).
+     *
+     * The recorded layer spans [blurLayerGeometry].size, with the rounded node
+     * rect positioned at [blurLayerGeometry].offset inside it; that inset is the
+     * shader outset on each axis so the SDF lines up with the node bounds.
+     */
+    private fun resolveGlassEffect(
+        blur: RenderEffect?,
+        blurLayerGeometry: AxBackdropBlurLayerGeometry,
+        cornerRadius: Float,
+    ): RenderEffect? {
+        if (blur == null) return null
+        if (cornerRadius <= 0f || !cornerRadius.isFinite()) return blur
+        val nodeSize = geometry.size
+        if (nodeSize.isUnspecified || nodeSize.width <= 0f || nodeSize.height <= 0f) return blur
+        val outsetX = blurLayerGeometry.offset.x
+        val outsetY = blurLayerGeometry.offset.y
+        val key = GlassKey(
+            radius = renderEffectRadius,
+            cornerRadius = cornerRadius,
+            width = nodeSize.width,
+            height = nodeSize.height,
+            outsetX = outsetX,
+            outsetY = outsetY,
+        )
+        glassRenderEffect?.let { if (glassKey == key) return it }
+        // Reached only when an input changed; drop the inner geometry-keyed cache
+        // so the refracted content is rebuilt against the current blur.
+        glassEffect.reset()
+        val built = glassEffect.build(
+            blur.asAndroidRenderEffect(),
+            nodeSize.width,
+            nodeSize.height,
+            cornerRadius,
+            outsetX,
+            outsetY,
+        )?.asComposeRenderEffect()
+        val resolved = built ?: blur
+        glassRenderEffect = resolved
+        glassKey = key
+        return resolved
+    }
+
     private fun canDrawBackdrop(
         effect: RenderEffect?,
         blurLayerGeometry: AxBackdropBlurLayerGeometry,
@@ -876,6 +929,15 @@ private class AxBackdropBlurNode(
         val size: Size
             get() = bounds.size
     }
+
+    private data class GlassKey(
+        val radius: Float,
+        val cornerRadius: Float,
+        val width: Float,
+        val height: Float,
+        val outsetX: Float,
+        val outsetY: Float,
+    )
 
     private fun ContentDrawScope.drawOverlay(color: Color) {
         if (color.alpha > 0f) {

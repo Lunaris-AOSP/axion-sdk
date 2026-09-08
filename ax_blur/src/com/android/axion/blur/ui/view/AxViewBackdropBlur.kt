@@ -35,6 +35,8 @@ import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import com.android.axion.blur.AxBlurSupport
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
+import com.android.axion.blur.glass.AxGlassRenderEffect
+import com.android.axion.blur.glass.toGlassCornerRadii
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 import com.android.axion.blur.model.AxBackdropBlurSettingsSubscription
 import com.android.internal.graphics.drawable.BackgroundBlurDrawable
@@ -87,6 +89,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     private var recordedSourceState = SourceRecord()
     private var sourceBlurEffect: RenderEffect? = null
     private var sourceBlurEffectRadius = -1f
+    private val glassEffect = AxGlassRenderEffect()
     private val preDrawListener = ViewTreeObserver.OnPreDrawListener {
         if (enabled) {
             val stateChanged = hasTrackedStateChanged()
@@ -620,7 +623,9 @@ class AxViewBackdropBlur @JvmOverloads constructor(
             return false
         }
         if (shouldRecordSource(source) && !recordSource(source)) return false
-        sourceBlurNode.setRenderEffect(resolveSourceBlurEffect())
+        sourceBlurNode.setRenderEffect(
+            resolveSourceBlurEffect(left, top, right, bottom, cornerRadii, cornerRadius),
+        )
         val save = if (alpha < 255) {
             canvas.saveLayerAlpha(
                 left.toFloat(),
@@ -844,7 +849,34 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         canvas.restoreToCount(save)
     }
 
-    private fun resolveSourceBlurEffect(): RenderEffect {
+    private fun resolveSourceBlurEffect(
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+        cornerRadii: FloatArray?,
+        cornerRadius: Float,
+    ): RenderEffect {
+        val blur = resolveBlurEffect()
+        // Glass refraction is computed for the host view's rounded-rect shape in
+        // the recorded node's coordinate space. It only aligns when the node is
+        // recorded in view space (not the transformed snapshot) and the draw
+        // target covers the full view, so gate to that case; otherwise plain blur.
+        if (sourceBlurSnapshot) return blur
+        if (left > 0 || top > 0 || right < view.width || bottom < view.height) return blur
+        val outset = blurRadiusPx.roundToInt().coerceAtLeast(0).toFloat()
+        val width = view.width.toFloat()
+        val height = view.height.toFloat()
+        val glassRadii = cornerRadii?.toGlassCornerRadii()
+        val effect = if (glassRadii != null) {
+            glassEffect.build(blur, width, height, glassRadii, outset)
+        } else {
+            glassEffect.build(blur, width, height, cornerRadius, outset)
+        }
+        return effect ?: blur
+    }
+
+    private fun resolveBlurEffect(): RenderEffect {
         val cached = sourceBlurEffect
         if (cached != null && sourceBlurEffectRadius == blurRadiusPx) {
             return cached
@@ -1218,6 +1250,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         if (blurRadiusPx == coerced) return
         blurRadiusPx = coerced
         sourceBlurEffect = null
+        glassEffect.reset()
         discardSourceBlur()
         if (coerced == 0f) {
             clear()

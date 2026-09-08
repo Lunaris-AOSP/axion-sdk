@@ -21,8 +21,13 @@ import android.os.SystemProperties
 internal object AxBlurProperties {
     private const val PROP_DISABLE_BLUR = "persist.sysui.disableBlur"
     private const val PROP_GLOBAL_BLUR_ENABLED = "ro.custom.blur.enable"
+    private const val PROP_DISABLE_GLASS = "persist.sysui.disableGlass"
 
     val disableBlur: Boolean = SystemProperties.getBoolean(PROP_DISABLE_BLUR, false)
     val defaultGlobalBlurEnabled: Boolean =
         SystemProperties.getBoolean(PROP_GLOBAL_BLUR_ENABLED, true)
+
+    // Kill switch for the Liquid Glass refraction effect. When set, all blur
+    // surfaces fall back to plain Gaussian blur.
+    val disableGlass: Boolean = SystemProperties.getBoolean(PROP_DISABLE_GLASS, false)
 }

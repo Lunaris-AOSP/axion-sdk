@@ -33,6 +33,7 @@ import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
+import com.android.axion.blur.glass.AxGlassRenderEffect
 import com.android.axion.blur.ui.view.AxViewBackdropBlur
 import kotlin.math.roundToInt
 
@@ -102,6 +103,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     private val sourceBounds = RectF()
     private var blurEffect: AndroidRenderEffect? = null
     private var blurEffectRadius = -1f
+    private val glassEffect = AxGlassRenderEffect()
     private var observedSource: AxBackdropBlurSourceLayout? = null
     private var observingPreDraw = false
     private var useSettingsBlurRadius = true
@@ -340,6 +342,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         if (storedBlurRadiusPx != coerced) {
             storedBlurRadiusPx = coerced
             blurEffect = null
+            glassEffect.reset()
             sourceBlurDirty = true
             view.invalidate()
         }
@@ -397,7 +400,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         val source = resolveDrawSource() ?: return false
         if (shouldRecordSource(source) && !recordSource(source)) return false
         if (!sourceBlurRecorded) return false
-        blurNode.setRenderEffect(resolveBlurEffect())
+        blurNode.setRenderEffect(resolveSurfaceBlurEffect())
         withClip(canvas) {
             canvas.drawRenderNode(blurNode)
             drawColorUnclipped(canvas, backdropTintColor)
@@ -590,6 +593,17 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         }
         child.draw(canvas)
         canvas.restoreToCount(save)
+    }
+
+    private fun resolveSurfaceBlurEffect(): AndroidRenderEffect {
+        val blur = resolveBlurEffect()
+        glassEffect.build(
+            blur,
+            view.width.toFloat(),
+            view.height.toFloat(),
+            cornerRadiusPx,
+        )?.let { return it }
+        return blur
     }
 
     private fun resolveBlurEffect(): AndroidRenderEffect {
