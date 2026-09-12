@@ -1,0 +1,45 @@
+package {
+    default_visibility: ["//visibility:public"],
+}
+
+cc_library_static {
+    name: "ax_graphics",
+
+    srcs: ["src/**/*.cpp"],
+
+    export_include_dirs: ["include"],
+
+    shared_libs: [
+        "libbase",
+        "liblog",
+        "libEGL",
+        "libGLESv2",
+        "libnativewindow",
+    ],
+
+    header_libs: [
+        "libcutils_headers",
+        "libsystem_headers",
+        "libhardware_headers",
+    ],
+
+    export_header_lib_headers: [
+        "libsystem_headers",
+    ],
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-DEGL_EGLEXT_PROTOTYPES",
+        "-DGL_GLEXT_PROTOTYPES",
+    ],
+
+    host_supported: false,
+    vendor_available: true,
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
+    min_sdk_version: "29",
+    visibility: ["//visibility:public"],
+}
