@@ -18,7 +18,7 @@ android_library {
     ],
 
     sdk_version: "current",
-    min_sdk_version: "current",
+    min_sdk_version: "31",
 
     kotlincflags: [
         "-Xjvm-default=all",

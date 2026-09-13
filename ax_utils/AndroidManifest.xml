@@ -17,5 +17,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.axion.utils">
 
+    <uses-sdk android:minSdkVersion="31" />
+
     <uses-permission android:name="android.permission.INTERNET" />
 </manifest>
