@@ -16,6 +16,7 @@ android_library {
         "kotlin-stdlib",
         "kotlinx-coroutines-core",
         "androidx.core_core-ktx",
+        "androidx.compose.animation_animation",
         "androidx.compose.animation_animation-core",
         "androidx.compose.foundation_foundation",
         "androidx.compose.material3_material3",
