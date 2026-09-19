@@ -1,0 +1,51 @@
+// Copyright (C) 2024-2026 Lunaris AOSP
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package {
+    default_visibility: ["//visibility:public"],
+}
+
+android_library {
+    name: "lunaris_water_ripple",
+    manifest: "AndroidManifest.xml",
+    srcs: ["src/**/*.java"],
+    resource_dirs: ["res"],
+    platform_apis: true,
+    use_resource_processor: true,
+    optimize: {
+        proguard_flags_files: ["proguard.flags"],
+    },
+}
+
+cc_library_shared {
+    name: "liblunaris_water_ripple",
+    srcs: [
+        "native/ripple_core.c",
+        "native/ripple_gles_shaders.c",
+        "native/ripple_gles_pipeline.c",
+        "native/ripple_gles_overlay_shader.c",
+        "native/ripple_gles_overlay.c",
+        "native/unlock_ripple.c",
+        "native/unlock_watercolor.c",
+        "native/watercolor_refresh.c",
+        "native/water_ripple_jni.c",
+    ],
+    local_include_dirs: ["native"],
+    header_libs: ["jni_headers"],
+    c_std: "c11",
+    cflags: ["-Wall", "-Wextra", "-Werror", "-fno-fast-math", "-ffp-contract=off"],
+    shared_libs: ["libandroid", "libEGL", "libGLESv2", "libjnigraphics", "liblog", "libm"],
+    stl: "none",
+    system_ext_specific: true,
+}

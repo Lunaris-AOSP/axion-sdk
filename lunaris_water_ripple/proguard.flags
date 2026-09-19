@@ -1,0 +1,4 @@
+# JNI uses exported names; retain the declaring class and native method names.
+-keepclasseswithmembernames,includedescriptorclasses class com.android.lunaris.waterripple.WaterRippleNative {
+    native <methods>;
+}
