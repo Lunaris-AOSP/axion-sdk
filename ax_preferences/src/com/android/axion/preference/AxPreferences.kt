@@ -29,11 +29,14 @@ import androidx.preference.PreferenceGroup
 import androidx.preference.PreferenceViewHolder
 import androidx.preference.SeekBarPreference
 import androidx.preference.SwitchPreferenceCompat
+import androidx.preference.TwoStatePreference
 import androidx.preference.R as PreferenceR
 import com.android.axion.compose.host.AxComposeView
 import com.android.axion.compose.preferences.ClickablePreference as AxClickablePreference
 import com.android.axion.compose.preferences.ListPreference as AxComposeListPreference
+import com.android.axion.compose.preferences.MainSwitchPreference as AxComposeMainSwitchPreference
 import com.android.axion.compose.preferences.PreferencePosition
+import com.android.axion.compose.preferences.PrimarySwitchPreference as AxComposePrimarySwitchPreference
 import com.android.axion.compose.preferences.SliderPreference as AxComposeSliderPreference
 import com.android.axion.compose.preferences.SwitchPreference as AxComposeSwitchPreference
 import com.android.axion.compose.theme.AxionTheme
@@ -56,6 +59,7 @@ open class AxPreference @JvmOverloads constructor(
             AxClickablePreference(
                 title = titleText(),
                 summary = summaryText(),
+                iconDrawable = icon,
                 enabled = isEnabled,
                 position = axPosition(),
                 onClick = { performClick() },
@@ -81,6 +85,7 @@ class AxSwitchPreference @JvmOverloads constructor(
             AxComposeSwitchPreference(
                 title = titleText(),
                 summary = summaryText(),
+                iconDrawable = icon,
                 checked = isChecked,
                 enabled = isEnabled,
                 position = axPosition(),
@@ -113,6 +118,7 @@ class AxListPreference @JvmOverloads constructor(
                 AxClickablePreference(
                     title = titleText(),
                     summary = summaryText(),
+                    iconDrawable = icon,
                     enabled = isEnabled,
                     position = axPosition(),
                     onClick = { performClick() },
@@ -121,6 +127,7 @@ class AxListPreference @JvmOverloads constructor(
                 AxComposeListPreference(
                     title = titleText(),
                     summary = summaryText(),
+                    iconDrawable = icon,
                     options = options,
                     value = value ?: "",
                     enabled = isEnabled,
@@ -166,6 +173,7 @@ class AxSeekBarPreference @JvmOverloads constructor(
             AxComposeSliderPreference(
                 title = titleText(),
                 summary = summaryText().orEmpty(),
+                iconDrawable = icon,
                 value = sliderValue,
                 valueRange = min.toFloat()..max.toFloat(),
                 displayValue = "${sliderValue.roundToInt()}$valueSuffix",
@@ -198,6 +206,67 @@ class AxSeekBarPreference @JvmOverloads constructor(
     private fun snapValue(newValue: Float): Int {
         val increment = getSeekBarIncrement().takeIf { it > 0 } ?: 1
         return (min + ((newValue - min) / increment).roundToInt() * increment).coerceIn(min, max)
+    }
+}
+
+open class AxMainSwitchPreference @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = PreferenceR.attr.switchPreferenceCompatStyle,
+    defStyleRes: Int = 0,
+) : TwoStatePreference(context, attrs, defStyleAttr, defStyleRes), GroupSectionDividerMixin {
+    init {
+        layoutResource = R.layout.ax_preference_compose
+        widgetLayoutResource = 0
+    }
+
+    override fun onBindViewHolder(holder: PreferenceViewHolder) {
+        super.onBindViewHolder(holder)
+        holder.bindAxPreference {
+            AxComposeMainSwitchPreference(
+                title = titleText(),
+                summary = summaryText(),
+                checked = isChecked,
+                enabled = isEnabled,
+                onCheckedChange = { checked ->
+                    if (callChangeListener(checked)) {
+                        isChecked = checked
+                    }
+                },
+            )
+        }
+    }
+}
+
+open class AxPrimarySwitchPreference @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = PreferenceR.attr.preferenceStyle,
+    defStyleRes: Int = 0,
+) : TwoStatePreference(context, attrs, defStyleAttr, defStyleRes), GroupSectionDividerMixin {
+    init {
+        layoutResource = R.layout.ax_preference_compose
+        widgetLayoutResource = 0
+    }
+
+    override fun onBindViewHolder(holder: PreferenceViewHolder) {
+        super.onBindViewHolder(holder)
+        holder.bindAxPreference {
+            AxComposePrimarySwitchPreference(
+                title = titleText(),
+                summary = summaryText(),
+                checked = isChecked,
+                enabled = isEnabled,
+                position = axPosition(),
+                iconDrawable = icon,
+                onClick = { performClick() },
+                onCheckedChange = { checked ->
+                    if (callChangeListener(checked)) {
+                        isChecked = checked
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -269,4 +338,6 @@ private fun Preference.isAxPreference(): Boolean {
             || this is AxSwitchPreference
             || this is AxListPreference
             || this is AxSeekBarPreference
+            || this is AxMainSwitchPreference
+            || this is AxPrimarySwitchPreference
 }

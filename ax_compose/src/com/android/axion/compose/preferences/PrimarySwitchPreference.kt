@@ -16,14 +16,17 @@
 
 package com.android.axion.compose.preferences
 
+import android.graphics.drawable.Drawable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -40,6 +43,7 @@ fun PrimarySwitchPreference(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     customIcon: @Composable (() -> Unit)? = null,
+    iconDrawable: Drawable? = null,
     enabled: Boolean = true,
     iconTint: Color? = null,
     iconBackgroundColor: Color? = null,
@@ -50,6 +54,7 @@ fun PrimarySwitchPreference(
         summary = summary,
         icon = icon,
         customIcon = customIcon,
+        iconDrawable = iconDrawable,
         enabled = enabled,
         iconTint = iconTint,
         iconBackgroundColor = iconBackgroundColor,
@@ -60,17 +65,23 @@ fun PrimarySwitchPreference(
             onLongClick = onLongClick,
         ),
         widget = {
-            Spacer(modifier = Modifier.width(16.dp))
             VerticalDivider(
-                modifier = Modifier.height(32.dp),
+                modifier = Modifier
+                    .height(PreferenceTokens.DividerHeight)
+                    .width(PreferenceTokens.DividerWidth),
                 color = MaterialTheme.colorScheme.outlineVariant,
             )
-            Spacer(modifier = Modifier.width(16.dp))
-            ExpressiveSwitch(
-                checked = checked,
-                onCheckedChange = if (enabled) onCheckedChange else null,
-                enabled = enabled,
-            )
+            Spacer(modifier = Modifier.width(PreferenceTokens.DividerTrailingSpacing))
+            Box(
+                modifier = Modifier.widthIn(min = PreferenceTokens.WidgetFrameMinWidth),
+                contentAlignment = Alignment.Center,
+            ) {
+                ExpressiveSwitch(
+                    checked = checked,
+                    onCheckedChange = if (enabled) onCheckedChange else null,
+                    enabled = enabled,
+                )
+            }
         },
     )
 }

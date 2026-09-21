@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
+
 package com.android.axion.compose.preferences
 
 import android.graphics.drawable.Drawable
@@ -121,7 +123,10 @@ fun AppListPreference(
                 .fillMaxWidth()
                 .clip(shape)
                 .background(MaterialTheme.colorScheme.surfaceBright)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(
+                    horizontal = PreferenceTokens.PaddingHorizontal,
+                    vertical = PreferenceTokens.PaddingVertical,
+                )
     ) {
         Text(
             text = title,
