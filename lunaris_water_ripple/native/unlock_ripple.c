@@ -34,15 +34,15 @@ struct UnlockRipple {
  * center and high-frequency ripples of a larger cone. Fullscreen padding keeps
  * the entire impulse inside the solver, including origins on edges and corners. */
 static void inject_fullscreen_wave(UnlockRipple *ripple, float cell_x, float cell_y) {
-    const float radius = 4.0f;
+    const float radius = 7.0f;
     for (int y = (int) floorf(cell_y - radius); y <= (int) ceilf(cell_y + radius); ++y) {
         for (int x = (int) floorf(cell_x - radius); x <= (int) ceilf(cell_x + radius); ++x) {
             const float dx = x - cell_x;
             const float dy = y - cell_y;
             const float distance = sqrtf(dx * dx + dy * dy);
             if (distance >= radius) continue;
-            ripple->velocity[y * ripple->stride + x] +=
-                    3.0f * (1.0f + cosf(3.14159265359f * distance / radius));
+            const float profile = cosf(3.14159265359f * distance / radius);
+            ripple->velocity[y * ripple->stride + x] += 4.0f * profile * (1.0f + profile);
         }
     }
 }
@@ -115,7 +115,7 @@ UnlockRipple *unlock_ripple_create(int width, int height, float x, float y,
         .mvp = ripple->mvp, .viewport_width = width, .viewport_height = height,
         .mesh_width = mesh_width, .mesh_height = mesh_height,
         .detail_width = ripple->columns, .detail_height = ripple->rows,
-        .refractive_index = 0.93f, .reflection_ratio = fullscreen ? 0.14f : 0.13f,
+        .refractive_index = 0.93f, .reflection_ratio = fullscreen ? 0.17f : 0.13f,
         .alpha_ratio_1 = 1, .alpha_ratio_2 = 1, .fresnel_ratio = 0.1f,
         .specular_ratio = 0.5f, .exponent_ratio = 20,
     };
@@ -207,7 +207,7 @@ bool unlock_ripple_draw(UnlockRipple *ripple, uint64_t elapsed_ns, float opacity
         lle_ripple_move_adaptive(ripple->velocity, ripple->heights,
                 1, 1, ripple->stride - 1, ripple->detail_rows - 1,
                 ripple->stride, ripple->detail_rows, false,
-                ripple->fullscreen ? 0.992f : 0.94f, 0.5f, step);
+                ripple->fullscreen ? 0.994f : 0.94f, 0.5f, step);
         if (ripple->fullscreen) damp_edges(ripple, step);
     }
     for (int row = 0; row < ripple->rows; ++row) {
@@ -226,8 +226,8 @@ bool unlock_ripple_draw(UnlockRipple *ripple, uint64_t elapsed_ns, float opacity
     lle_ripple_overlay_default_options(&options);
     if (ripple->fullscreen) {
         // Keep the shoulders of the crest visible as the broader wave settles.
-        options.mask_low = 0.03f;
-        options.mask_high = 0.16f;
+        options.mask_low = 0.02f;
+        options.mask_high = 0.12f;
     }
     options.opacity = fminf(1, fmaxf(0, opacity));
     char error[512];
