@@ -113,7 +113,7 @@ private fun buildExpressiveTypography(context: Context): Typography {
         ),
         titleLargeEmphasized = TextStyle(
             fontFamily = brand ?: variableFont("variable-title-large-emphasized"), fontWeight = FontWeight.SemiBold,
-            fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = 0.sp, hyphens = Hyphens.Auto,
+            fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = 0.02.em, hyphens = Hyphens.Auto,
         ),
         titleMedium = TextStyle(
             fontFamily = brand ?: variableFont("variable-title-medium"), fontWeight = FontWeight.Medium,
