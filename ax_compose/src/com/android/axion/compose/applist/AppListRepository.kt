@@ -16,6 +16,8 @@
 
 package com.android.axion.compose.applist
 
+import android.content.ComponentName
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
@@ -62,21 +64,22 @@ fun rememberAppList(vararg filters: AppFilter): State<List<AppEntry>> {
             val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
             val entries = apps.mapNotNull { info ->
                 val isSystem = info.flags and ApplicationInfo.FLAG_SYSTEM != 0
-                val launchIntent = PackageManagerUtils.getLaunchIntentForPackage(
-                    context,
-                    info.packageName,
-                )
 
                 if (AppFilter.USER_ONLY in filterSet && isSystem) return@mapNotNull null
                 if (AppFilter.SYSTEM_ONLY in filterSet && !isSystem) return@mapNotNull null
                 if (AppFilter.NO_OVERLAYS in filterSet && info.isResourceOverlay) return@mapNotNull null
-                if (AppFilter.LAUNCHABLE_ONLY in filterSet && launchIntent == null) {
-                    return@mapNotNull null
+                val launcherComponent = if (AppFilter.LAUNCHABLE_ONLY in filterSet) {
+                    getLauncherComponent(pm, info.packageName) ?: return@mapNotNull null
+                } else {
+                    PackageManagerUtils.getLaunchIntentForPackage(
+                        context,
+                        info.packageName,
+                    )?.component
                 }
 
                 val icon = PackageManagerUtils.loadApplicationIcon(pm, info)
                     ?: return@mapNotNull null
-                val className = launchIntent?.component?.className ?: ""
+                val className = launcherComponent?.className ?: ""
                 AppEntry(
                     packageName = info.packageName,
                     className = className,
@@ -93,6 +96,15 @@ fun rememberAppList(vararg filters: AppFilter): State<List<AppEntry>> {
     }
 
     return state
+}
+
+private fun getLauncherComponent(pm: PackageManager, packageName: String): ComponentName? {
+    val intent = Intent(Intent.ACTION_MAIN)
+        .addCategory(Intent.CATEGORY_LAUNCHER)
+        .setPackage(packageName)
+    val activity = pm.queryIntentActivities(intent, 0).firstOrNull()?.activityInfo
+        ?: return null
+    return ComponentName(activity.packageName, activity.name)
 }
 
 @Composable
