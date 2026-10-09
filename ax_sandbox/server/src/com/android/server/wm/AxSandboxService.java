@@ -59,10 +59,19 @@ public final class AxSandboxService extends SystemService {
             String packageName = data.getSchemeSpecificPart();
             if (packageName == null) return;
 
-            mAppLockService.removeLockedApp(packageName);
-            mAppHideService.setPackageHidden(packageName, false);
+            int uid = intent.getIntExtra(Intent.EXTRA_UID, -1);
+            int userId = uid >= 0 ? UserHandle.getUserId(uid) : 0;
+            boolean removedForAll = intent.getBooleanExtra(Intent.EXTRA_REMOVED_FOR_ALL_USERS, false);
+
+            mAppLockService.cleanupPackage(packageName, userId);
+            mAppHideService.setPackageHidden(packageName, false, userId);
+            mIsolationService.removeSandboxedPackage(packageName, userId);
+            if (removedForAll || userId == 0) {
+                mAppLockService.cleanupPackage(packageName, 999);
+                mAppHideService.setPackageHidden(packageName, false, 999);
+                mIsolationService.removeSandboxedPackage(packageName, 999);
+            }
             mAppHideService.clearNotificationsForPackage(packageName);
-            mIsolationService.removeSandboxedPackage(packageName);
         }
     };
 
@@ -120,8 +129,8 @@ public final class AxSandboxService extends SystemService {
         }
     }
 
-    public boolean isAppLocked(String packageName) {
-        return mAppLockService.isAppLocked(packageName);
+    public boolean isAppLocked(String packageName, int userId) {
+        return mAppLockService.isAppLocked(packageName, userId);
     }
 
     public boolean isAppLocked(ActivityRecord r) {
@@ -132,36 +141,32 @@ public final class AxSandboxService extends SystemService {
         return mAppLockService.isAppLocked(packageName, uid, component);
     }
 
-    public int getAppLockState(String packageName) {
-        return mAppLockService.getAppLockState(packageName);
+    public int getAppLockState(String packageName, int userId) {
+        return mAppLockService.getAppLockState(packageName, userId);
     }
 
-    public int getAppLockStateForUser(String packageName, int userId) {
-        return mAppLockService.getAppLockStateForUser(packageName, userId);
+    public boolean hasAppLock(String packageName, int userId) {
+        return mAppLockService.hasAppLock(packageName, userId);
     }
 
-    public boolean hasAppLock(String packageName) {
-        return mAppLockService.hasAppLock(packageName);
+    public void addLockedApp(String packageName, int userId) {
+        mAppLockService.addLockedApp(packageName, userId);
     }
 
-    public void addLockedApp(String packageName) {
-        mAppLockService.addLockedApp(packageName);
+    public void removeLockedApp(String packageName, int userId) {
+        mAppLockService.removeLockedApp(packageName, userId);
     }
 
-    public void removeLockedApp(String packageName) {
-        mAppLockService.removeLockedApp(packageName);
+    public List<String> getLockedPackages(int userId) {
+        return mAppLockService.getLockedPackages(userId);
     }
 
-    public List<String> getLockedPackages() {
-        return mAppLockService.getLockedPackages();
+    public List<String> getLockablePackages(int userId) {
+        return mAppLockService.getLockablePackages(userId);
     }
 
-    public List<String> getLockablePackages() {
-        return mAppLockService.getLockablePackages();
-    }
-
-    public boolean isPackageLockable(String packageName) {
-        return mAppLockService.isPackageLockable(packageName);
+    public boolean isPackageLockable(String packageName, int userId) {
+        return mAppLockService.isPackageLockable(packageName, userId);
     }
 
     public void unlockApp(String packageName, int userId) {
@@ -244,28 +249,28 @@ public final class AxSandboxService extends SystemService {
         mAppLockService.unregisterAppSessionListener(listener);
     }
 
-    public boolean isPackageHidden(String packageName) {
-        return mAppHideService.isPackageHidden(packageName);
+    public boolean isPackageHidden(String packageName, int userId) {
+        return mAppHideService.isPackageHidden(packageName, userId);
     }
 
-    public void setPackageHidden(String packageName, boolean hidden) {
-        mAppHideService.setPackageHidden(packageName, hidden);
+    public void setPackageHidden(String packageName, boolean hidden, int userId) {
+        mAppHideService.setPackageHidden(packageName, hidden, userId);
     }
 
-    public boolean isPackageHiddenFromLauncher(String packageName) {
-        return mAppHideService.isPackageHiddenFromLauncher(packageName);
+    public boolean isPackageHiddenFromLauncher(String packageName, int userId) {
+        return mAppHideService.isPackageHiddenFromLauncher(packageName, userId);
     }
 
-    public void setPackageHiddenFromLauncher(String packageName, boolean hidden) {
-        mAppHideService.setPackageHiddenFromLauncher(packageName, hidden);
+    public void setPackageHiddenFromLauncher(String packageName, boolean hidden, int userId) {
+        mAppHideService.setPackageHiddenFromLauncher(packageName, hidden, userId);
     }
 
-    public List<String> getHiddenPackages() {
-        return mAppHideService.getHiddenPackages();
+    public List<String> getHiddenPackages(int userId) {
+        return mAppHideService.getHiddenPackages(userId);
     }
 
-    public List<String> getHiddenFromLauncherPackages() {
-        return mAppHideService.getHiddenFromLauncherPackages();
+    public List<String> getHiddenFromLauncherPackages(int userId) {
+        return mAppHideService.getHiddenFromLauncherPackages(userId);
     }
 
     public void registerHiddenNotificationListener(IHiddenNotificationListener listener) {
@@ -288,51 +293,51 @@ public final class AxSandboxService extends SystemService {
         mAppHideService.onHiddenNotificationRemoved(key);
     }
 
-    public boolean isPackageSandboxed(String packageName) {
-        return mIsolationService.isPackageSandboxed(packageName);
+    public boolean isPackageSandboxed(String packageName, int userId) {
+        return mIsolationService.isPackageSandboxed(packageName, userId);
     }
 
-    public void addSandboxedPackage(String packageName) {
-        mIsolationService.addSandboxedPackage(packageName);
+    public void addSandboxedPackage(String packageName, int userId) {
+        mIsolationService.addSandboxedPackage(packageName, userId);
     }
 
-    public void removeSandboxedPackage(String packageName) {
-        mIsolationService.removeSandboxedPackage(packageName);
+    public void removeSandboxedPackage(String packageName, int userId) {
+        mIsolationService.removeSandboxedPackage(packageName, userId);
     }
 
-    public List<String> getSandboxedPackages() {
-        return mIsolationService.getSandboxedPackages();
+    public List<String> getSandboxedPackages(int userId) {
+        return mIsolationService.getSandboxedPackages(userId);
     }
 
-    public void setRestrictedGids(String packageName, int[] gids) {
-        mIsolationService.setRestrictedGids(packageName, gids);
+    public void setRestrictedGids(String packageName, int[] gids, int userId) {
+        mIsolationService.setRestrictedGids(packageName, gids, userId);
     }
 
-    public int[] getRestrictedGids(String packageName) {
-        return mIsolationService.getRestrictedGids(packageName);
+    public int[] getRestrictedGids(String packageName, int userId) {
+        return mIsolationService.getRestrictedGids(packageName, userId);
     }
 
-    public boolean isSandboxDataIsolationEnabled(String packageName) {
-        return mIsolationService.isSandboxDataIsolationEnabled(packageName);
+    public boolean isSandboxDataIsolationEnabled(String packageName, int userId) {
+        return mIsolationService.isSandboxDataIsolationEnabled(packageName, userId);
     }
 
-    public void setSandboxDataIsolationEnabled(String packageName, boolean enabled) {
-        mIsolationService.setSandboxDataIsolationEnabled(packageName, enabled);
+    public void setSandboxDataIsolationEnabled(String packageName, boolean enabled, int userId) {
+        mIsolationService.setSandboxDataIsolationEnabled(packageName, enabled, userId);
     }
 
-    public boolean isSpoofSettingEnabled(String packageName, String settingKey) {
-        return mSpoofService.isSpoofSettingEnabled(packageName, settingKey);
+    public boolean isSpoofSettingEnabled(String packageName, String settingKey, int userId) {
+        return mSpoofService.isSpoofSettingEnabled(packageName, settingKey, userId);
     }
 
-    public void setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled) {
-        mSpoofService.setSpoofSettingEnabled(packageName, settingKey, enabled);
+    public void setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled, int userId) {
+        mSpoofService.setSpoofSettingEnabled(packageName, settingKey, enabled, userId);
     }
 
-    public List<String> getEnabledSpoofSettings(String packageName) {
-        return mSpoofService.getEnabledSpoofSettings(packageName);
+    public List<String> getEnabledSpoofSettings(String packageName, int userId) {
+        return mSpoofService.getEnabledSpoofSettings(packageName, userId);
     }
 
-    public String getSpoofedSetting(String callingPackage, String settingName) {
-        return mSpoofService.getSpoofedSetting(callingPackage, settingName);
+    public String getSpoofedSetting(String callingPackage, String settingName, int userId) {
+        return mSpoofService.getSpoofedSetting(callingPackage, settingName, userId);
     }
 }

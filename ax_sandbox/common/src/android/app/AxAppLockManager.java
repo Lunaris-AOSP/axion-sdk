@@ -66,63 +66,55 @@ public class AxAppLockManager {
     public AxAppLockManager(Context context) {
     }
 
-    public boolean isAppLocked(String packageName) {
-        return getAppLockState(packageName).needsAuth();
+    public boolean isAppLocked(String packageName, int userId) {
+        return getAppLockState(packageName, userId).needsAuth();
     }
 
-    public AppLockState getAppLockState(String packageName) {
+    public AppLockState getAppLockState(String packageName, int userId) {
         try {
-            return AppLockState.fromOrdinal(getService().getSandboxAppLockState(packageName));
+            return AppLockState.fromOrdinal(getService().getSandboxAppLockState(packageName, userId));
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public AppLockState getAppLockStateForUser(String packageName, int userId) {
+    public void addLockedApp(String packageName, int userId) {
         try {
-            return AppLockState.fromOrdinal(getService().getSandboxAppLockStateForUser(packageName, userId));
+            getService().addSandboxLockedApp(packageName, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public void addLockedApp(String packageName) {
+    public void removeLockedApp(String packageName, int userId) {
         try {
-            getService().addSandboxLockedApp(packageName);
+            getService().removeSandboxLockedApp(packageName, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public void removeLockedApp(String packageName) {
+    public List<String> getLockedPackages(int userId) {
         try {
-            getService().removeSandboxLockedApp(packageName);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
-    }
-
-    public List<String> getLockedPackages() {
-        try {
-            List<String> result = getService().getSandboxLockedPackages();
+            List<String> result = getService().getSandboxLockedPackages(userId);
             return result != null ? result : Collections.emptyList();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public List<String> getLockablePackages() {
+    public List<String> getLockablePackages(int userId) {
         try {
-            List<String> result = getService().getSandboxLockablePackages();
+            List<String> result = getService().getSandboxLockablePackages(userId);
             return result != null ? result : Collections.emptyList();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public boolean isPackageLockable(String packageName) {
+    public boolean isPackageLockable(String packageName, int userId) {
         try {
-            return getService().isSandboxPackageLockable(packageName);
+            return getService().isSandboxPackageLockable(packageName, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

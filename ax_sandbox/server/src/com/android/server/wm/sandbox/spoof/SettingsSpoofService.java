@@ -38,23 +38,23 @@ public class SettingsSpoofService {
         return STATIC_SPOOFED_SETTINGS.get(settingName);
     }
 
-    public boolean isSpoofSettingEnabled(String packageName, String settingKey) {
-        return mRepository.isSpoofSettingEnabled(packageName, settingKey);
+    public boolean isSpoofSettingEnabled(String packageName, String settingKey, int userId) {
+        return mRepository.isSpoofSettingEnabled(packageName, settingKey, userId);
     }
 
-    public void setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled) {
-        mRepository.setSpoofSettingEnabled(packageName, settingKey, enabled);
+    public void setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled, int userId) {
+        mRepository.setSpoofSettingEnabled(packageName, settingKey, enabled, userId);
     }
 
-    public List<String> getEnabledSpoofSettings(String packageName) {
-        return mRepository.getEnabledSpoofSettings(packageName);
+    public List<String> getEnabledSpoofSettings(String packageName, int userId) {
+        return mRepository.getEnabledSpoofSettings(packageName, userId);
     }
 
-    public String getSpoofedSetting(String callingPackage, String settingName) {
+    public String getSpoofedSetting(String callingPackage, String settingName, int userId) {
         if (TextUtils.isEmpty(callingPackage) || TextUtils.isEmpty(settingName)) {
             return null;
         }
-        if (!mRepository.isSpoofSettingEnabled(callingPackage, settingName)) {
+        if (!mRepository.isSpoofSettingEnabled(callingPackage, settingName, userId)) {
             return null;
         }
         return getStaticSpoofedValue(settingName);

@@ -31,7 +31,7 @@ public class AppHideService {
         mRepository = repository;
         mNotificationController = notificationController;
         if (mNotificationController != null) {
-            mNotificationController.setPackageHiddenChecker(mRepository::isPackageHidden);
+            mNotificationController.setPackageHiddenChecker((pkg) -> mRepository.isPackageHidden(pkg, 0));
         }
         sInstance = this;
     }
@@ -43,30 +43,30 @@ public class AppHideService {
         return mLauncherApps;
     }
 
-    public boolean isPackageHidden(String packageName) {
-        return mRepository.isPackageHidden(packageName);
+    public boolean isPackageHidden(String packageName, int userId) {
+        return mRepository.isPackageHidden(packageName, userId);
     }
 
-    public boolean isPackageHiddenFromLauncher(String packageName) {
-        return mRepository.isPackageHiddenFromLauncher(packageName);
+    public boolean isPackageHiddenFromLauncher(String packageName, int userId) {
+        return mRepository.isPackageHiddenFromLauncher(packageName, userId);
     }
 
-    public void setPackageHidden(String packageName, boolean hidden) {
-        if (hidden && !isPackageLockable(packageName)) return;
-        mRepository.setPackageHidden(packageName, hidden);
+    public void setPackageHidden(String packageName, boolean hidden, int userId) {
+        if (hidden && !isPackageLockable(packageName, userId)) return;
+        mRepository.setPackageHidden(packageName, hidden, userId);
     }
 
-    public void setPackageHiddenFromLauncher(String packageName, boolean hidden) {
-        if (hidden && !isPackageLockable(packageName)) return;
-        mRepository.setPackageHiddenFromLauncher(packageName, hidden);
+    public void setPackageHiddenFromLauncher(String packageName, boolean hidden, int userId) {
+        if (hidden && !isPackageLockable(packageName, userId)) return;
+        mRepository.setPackageHiddenFromLauncher(packageName, hidden, userId);
     }
 
-    public List<String> getHiddenPackages() {
-        return mRepository.getHiddenPackages();
+    public List<String> getHiddenPackages(int userId) {
+        return mRepository.getHiddenPackages(userId);
     }
 
-    public List<String> getHiddenFromLauncherPackages() {
-        return mRepository.getHiddenFromLauncherPackages();
+    public List<String> getHiddenFromLauncherPackages(int userId) {
+        return mRepository.getHiddenFromLauncherPackages(userId);
     }
 
     public void registerHiddenNotificationListener(IHiddenNotificationListener listener) {
@@ -93,18 +93,18 @@ public class AppHideService {
         if (mNotificationController != null) mNotificationController.clearNotificationsForPackage(packageName);
     }
 
-    private boolean isPackageLockable(String packageName) {
+    public boolean isPackageLockable(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName) || AppLockService.BLACKLISTED_PACKAGES.contains(packageName)) {
             return false;
         }
-        if (mRepository.isPackageHidden(packageName) || mRepository.isPackageHiddenFromLauncher(packageName)) {
+        if (mRepository.isPackageHidden(packageName, userId) || mRepository.isPackageHiddenFromLauncher(packageName, userId)) {
             return true;
         }
         LauncherApps launcherApps = getLauncherApps();
         if (launcherApps != null) {
             try {
                 List<LauncherActivityInfo> activities = launcherApps.getActivityList(
-                        packageName, UserHandle.of(UserHandle.USER_SYSTEM));
+                        packageName, UserHandle.of(userId));
                 if (activities != null && !activities.isEmpty()) {
                     return true;
                 }

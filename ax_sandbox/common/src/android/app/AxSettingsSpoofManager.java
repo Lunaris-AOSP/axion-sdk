@@ -29,34 +29,34 @@ public class AxSettingsSpoofManager {
     public AxSettingsSpoofManager(Context context) {
     }
 
-    public boolean isSpoofSettingEnabled(String packageName, String settingKey) {
+    public boolean isSpoofSettingEnabled(String packageName, String settingKey, int userId) {
         try {
-            return getService().isSandboxSpoofSettingEnabled(packageName, settingKey);
+            return getService().isSandboxSpoofSettingEnabled(packageName, settingKey, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public void setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled) {
+    public void setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled, int userId) {
         try {
-            getService().setSandboxSpoofSettingEnabled(packageName, settingKey, enabled);
+            getService().setSandboxSpoofSettingEnabled(packageName, settingKey, enabled, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public List<String> getEnabledSpoofSettings(String packageName) {
+    public List<String> getEnabledSpoofSettings(String packageName, int userId) {
         try {
-            List<String> result = getService().getSandboxEnabledSpoofSettings(packageName);
+            List<String> result = getService().getSandboxEnabledSpoofSettings(packageName, userId);
             return result != null ? result : Collections.emptyList();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public String getSpoofedSetting(String callingPackage, String settingName) {
+    public String getSpoofedSetting(String callingPackage, String settingName, int userId) {
         try {
-            return getService().getSandboxSpoofedSetting(callingPackage, settingName);
+            return getService().getSandboxSpoofedSetting(callingPackage, settingName, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

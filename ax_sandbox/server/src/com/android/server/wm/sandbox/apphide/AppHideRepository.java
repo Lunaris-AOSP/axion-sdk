@@ -17,6 +17,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.lang.NumberFormatException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -53,46 +54,87 @@ public class AppHideRepository {
         loadConfig();
     }
 
-    public boolean isPackageHidden(String packageName) {
+    public static String toKey(String packageName, int userId) {
+        if (TextUtils.isEmpty(packageName)) return "";
+        int colon = packageName.indexOf(':');
+        if (colon >= 0) {
+            return packageName;
+        }
+        return packageName + ":" + userId;
+    }
+
+    public static String getPackageName(String key) {
+        if (key == null) return "";
+        int colon = key.indexOf(':');
+        return colon >= 0 ? key.substring(0, colon) : key;
+    }
+
+    public static int getUserId(String key) {
+        if (key == null) return 0;
+        int colon = key.indexOf(':');
+        if (colon >= 0) {
+            try {
+                return Integer.parseInt(key.substring(colon + 1));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return 0;
+    }
+
+    public boolean isPackageHidden(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        return mHiddenPackages.contains(packageName);
+        return mHiddenPackages.contains(toKey(packageName, userId));
     }
 
-    public boolean isPackageHiddenFromLauncher(String packageName) {
+    public boolean isPackageHiddenFromLauncher(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        return mLauncherHiddenPackages.contains(packageName);
+        return mLauncherHiddenPackages.contains(toKey(packageName, userId));
     }
 
-    public List<String> getHiddenPackages() {
-        return new ArrayList<>(mHiddenPackages);
+    public List<String> getHiddenPackages(int userId) {
+        List<String> result = new ArrayList<>();
+        for (String key : mHiddenPackages) {
+            if (getUserId(key) == userId) {
+                result.add(getPackageName(key));
+            }
+        }
+        return result;
     }
 
-    public List<String> getHiddenFromLauncherPackages() {
-        return new ArrayList<>(mLauncherHiddenPackages);
+    public List<String> getHiddenFromLauncherPackages(int userId) {
+        List<String> result = new ArrayList<>();
+        for (String key : mLauncherHiddenPackages) {
+            if (getUserId(key) == userId) {
+                result.add(getPackageName(key));
+            }
+        }
+        return result;
     }
 
-    public Set<String> getAllHiddenPackages() {
-        Set<String> all = new HashSet<>(mHiddenPackages);
-        all.addAll(mLauncherHiddenPackages);
+    public Set<String> getAllHiddenPackages(int userId) {
+        Set<String> all = new HashSet<>(getHiddenPackages(userId));
+        all.addAll(getHiddenFromLauncherPackages(userId));
         return all;
     }
 
-    public boolean setPackageHidden(String packageName, boolean hidden) {
+    public boolean setPackageHidden(String packageName, boolean hidden, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        boolean changed = hidden ? mHiddenPackages.add(packageName) : mHiddenPackages.remove(packageName);
+        String key = toKey(packageName, userId);
+        boolean changed = hidden ? mHiddenPackages.add(key) : mHiddenPackages.remove(key);
         if (changed) {
             scheduleSave();
-            broadcastPackageChange(packageName);
+            broadcastPackageChange(packageName, userId);
         }
         return changed;
     }
 
-    public boolean setPackageHiddenFromLauncher(String packageName, boolean hidden) {
+    public boolean setPackageHiddenFromLauncher(String packageName, boolean hidden, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        boolean changed = hidden ? mLauncherHiddenPackages.add(packageName) : mLauncherHiddenPackages.remove(packageName);
+        String key = toKey(packageName, userId);
+        boolean changed = hidden ? mLauncherHiddenPackages.add(key) : mLauncherHiddenPackages.remove(key);
         if (changed) {
             scheduleSave();
-            broadcastPackageChange(packageName);
+            broadcastPackageChange(packageName, userId);
         }
         return changed;
     }
@@ -113,9 +155,9 @@ public class AppHideRepository {
         JSONArray arr = config.optJSONArray(key);
         if (arr != null) {
             for (int i = 0; i < arr.length(); i++) {
-                String pkg = arr.optString(i);
-                if (!TextUtils.isEmpty(pkg)) {
-                    result.add(pkg);
+                String entry = arr.optString(i);
+                if (!TextUtils.isEmpty(entry)) {
+                    result.add(entry.contains(":") ? entry : entry + ":0");
                 }
             }
         }
@@ -136,17 +178,17 @@ public class AppHideRepository {
         });
     }
 
-    private void broadcastPackageChange(String packageName) {
+    private void broadcastPackageChange(String packageName, int userId) {
         mBgHandler.post(() -> {
             try {
-                int uid = mContext.getPackageManager().getApplicationInfo(packageName, 0).uid;
+                int uid = mContext.getPackageManager().getApplicationInfoAsUser(packageName, 0, userId).uid;
                 Intent intent = new Intent(Intent.ACTION_PACKAGE_CHANGED);
                 intent.setData(Uri.fromParts("package", packageName, null));
                 intent.putExtra(Intent.EXTRA_UID, uid);
-                intent.putExtra(Intent.EXTRA_USER_HANDLE, UserHandle.getUserId(uid));
+                intent.putExtra(Intent.EXTRA_USER_HANDLE, userId);
                 intent.putExtra(Intent.EXTRA_CHANGED_COMPONENT_NAME_LIST, new String[]{packageName});
                 intent.putExtra(Intent.EXTRA_DONT_KILL_APP, true);
-                mContext.sendBroadcastAsUser(intent, UserHandle.of(UserHandle.getUserId(uid)));
+                mContext.sendBroadcastAsUser(intent, UserHandle.of(userId));
             } catch (Exception ignored) {
             }
         });

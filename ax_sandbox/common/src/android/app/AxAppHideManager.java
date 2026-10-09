@@ -32,50 +32,50 @@ public class AxAppHideManager {
     public AxAppHideManager(Context context) {
     }
 
-    public boolean isPackageHidden(String packageName) {
+    public boolean isPackageHidden(String packageName, int userId) {
         try {
-            return getService().isSandboxPackageHidden(packageName);
+            return getService().isSandboxPackageHidden(packageName, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public void setPackageHidden(String packageName, boolean hidden) {
+    public void setPackageHidden(String packageName, boolean hidden, int userId) {
         try {
-            getService().setSandboxPackageHidden(packageName, hidden);
+            getService().setSandboxPackageHidden(packageName, hidden, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public List<String> getHiddenPackages() {
+    public List<String> getHiddenPackages(int userId) {
         try {
-            List<String> result = getService().getSandboxHiddenPackages();
+            List<String> result = getService().getSandboxHiddenPackages(userId);
             return result != null ? result : Collections.emptyList();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public boolean isPackageHiddenFromLauncher(String packageName) {
+    public boolean isPackageHiddenFromLauncher(String packageName, int userId) {
         try {
-            return getService().isSandboxPackageHiddenFromLauncher(packageName);
+            return getService().isSandboxPackageHiddenFromLauncher(packageName, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public void setPackageHiddenFromLauncher(String packageName, boolean hidden) {
+    public void setPackageHiddenFromLauncher(String packageName, boolean hidden, int userId) {
         try {
-            getService().setSandboxPackageHiddenFromLauncher(packageName, hidden);
+            getService().setSandboxPackageHiddenFromLauncher(packageName, hidden, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
     }
 
-    public List<String> getHiddenFromLauncherPackages() {
+    public List<String> getHiddenFromLauncherPackages(int userId) {
         try {
-            List<String> result = getService().getSandboxHiddenFromLauncherPackages();
+            List<String> result = getService().getSandboxHiddenFromLauncherPackages(userId);
             return result != null ? result : Collections.emptyList();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();

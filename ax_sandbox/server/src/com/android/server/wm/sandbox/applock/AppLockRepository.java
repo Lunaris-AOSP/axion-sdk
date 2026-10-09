@@ -15,6 +15,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.lang.NumberFormatException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -76,35 +77,68 @@ public class AppLockRepository {
         return mLockTimeout;
     }
 
+    public static String toKey(String packageName, int userId) {
+        if (TextUtils.isEmpty(packageName)) return "";
+        int colon = packageName.indexOf(':');
+        if (colon >= 0) {
+            return packageName;
+        }
+        return packageName + ":" + userId;
+    }
+
+    public static String getPackageName(String key) {
+        if (key == null) return "";
+        int colon = key.indexOf(':');
+        return colon >= 0 ? key.substring(0, colon) : key;
+    }
+
+    public static int getUserId(String key) {
+        if (key == null) return 0;
+        int colon = key.indexOf(':');
+        if (colon >= 0) {
+            try {
+                return Integer.parseInt(key.substring(colon + 1));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return 0;
+    }
+
     public boolean isCheckRecentTasks() {
         return mCheckRecentTasks;
     }
 
-    public boolean isAppLocked(String packageName) {
+    public boolean isAppLocked(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        return mLockedPackages.contains(packageName);
+        return mLockedPackages.contains(toKey(packageName, userId));
     }
 
     public boolean hasLockedPackages() {
         return !mLockedPackages.isEmpty();
     }
 
-    public List<String> getLockedPackages() {
-        return new ArrayList<>(mLockedPackages);
+    public List<String> getLockedPackages(int userId) {
+        List<String> result = new ArrayList<>();
+        for (String key : mLockedPackages) {
+            if (getUserId(key) == userId) {
+                result.add(getPackageName(key));
+            }
+        }
+        return result;
     }
 
-    public boolean addLockedApp(String packageName) {
+    public boolean addLockedApp(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        boolean changed = mLockedPackages.add(packageName);
+        boolean changed = mLockedPackages.add(toKey(packageName, userId));
         if (changed) {
             scheduleSave();
         }
         return changed;
     }
 
-    public boolean removeLockedApp(String packageName) {
+    public boolean removeLockedApp(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        boolean changed = mLockedPackages.remove(packageName);
+        boolean changed = mLockedPackages.remove(toKey(packageName, userId));
         if (changed) {
             scheduleSave();
         }
@@ -124,9 +158,9 @@ public class AppLockRepository {
         Set<String> newPkgs = new HashSet<>();
         if (arr != null) {
             for (int i = 0; i < arr.length(); i++) {
-                String pkg = arr.optString(i);
-                if (!TextUtils.isEmpty(pkg)) {
-                    newPkgs.add(pkg);
+                String entry = arr.optString(i);
+                if (!TextUtils.isEmpty(entry)) {
+                    newPkgs.add(entry.contains(":") ? entry : entry + ":0");
                 }
             }
         }

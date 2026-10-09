@@ -17,6 +17,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.lang.NumberFormatException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -60,66 +61,109 @@ public class SandboxIsolationRepository {
         loadConfig();
     }
 
-    public boolean isPackageSandboxed(String packageName) {
-        if (TextUtils.isEmpty(packageName)) return false;
-        return mSandboxedPackages.contains(packageName);
+    public static String toKey(String packageName, int userId) {
+        if (TextUtils.isEmpty(packageName)) return "";
+        int colon = packageName.indexOf(':');
+        if (colon >= 0) {
+            return packageName;
+        }
+        return packageName + ":" + userId;
     }
 
-    public List<String> getSandboxedPackages() {
-        return new ArrayList<>(mSandboxedPackages);
+    public static String getPackageName(String key) {
+        if (key == null) return "";
+        int colon = key.indexOf(':');
+        return colon >= 0 ? key.substring(0, colon) : key;
     }
 
-    public boolean setPackageSandboxed(String packageName, boolean sandboxed) {
+    public static int getUserId(String key) {
+        if (key == null) return 0;
+        int colon = key.indexOf(':');
+        if (colon >= 0) {
+            try {
+                return Integer.parseInt(key.substring(colon + 1));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return 0;
+    }
+
+    public boolean isPackageSandboxed(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        boolean changed = sandboxed ? mSandboxedPackages.add(packageName) : mSandboxedPackages.remove(packageName);
+        return mSandboxedPackages.contains(toKey(packageName, userId));
+    }
+
+    public List<String> getSandboxedPackages(int userId) {
+        List<String> result = new ArrayList<>();
+        for (String key : mSandboxedPackages) {
+            if (getUserId(key) == userId) {
+                result.add(getPackageName(key));
+            }
+        }
+        return result;
+    }
+
+    public boolean setPackageSandboxed(String packageName, boolean sandboxed, int userId) {
+        if (TextUtils.isEmpty(packageName)) return false;
+        String key = toKey(packageName, userId);
+        boolean changed = sandboxed ? mSandboxedPackages.add(key) : mSandboxedPackages.remove(key);
         if (changed) {
             scheduleSave();
-            broadcastPackageChange(packageName);
+            broadcastPackageChange(packageName, userId);
         }
         return changed;
     }
 
-    public boolean isDevOptionsHidden(String packageName) {
+    public boolean isDevOptionsHidden(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        return mHideDevOptsPackages.contains(packageName);
+        return mHideDevOptsPackages.contains(toKey(packageName, userId));
     }
 
-    public List<String> getDevOptionsHiddenPackages() {
-        return new ArrayList<>(mHideDevOptsPackages);
+    public List<String> getDevOptionsHiddenPackages(int userId) {
+        List<String> result = new ArrayList<>();
+        for (String key : mHideDevOptsPackages) {
+            if (getUserId(key) == userId) {
+                result.add(getPackageName(key));
+            }
+        }
+        return result;
     }
 
-    public boolean setDevOptionsHidden(String packageName, boolean hidden) {
+    public boolean setDevOptionsHidden(String packageName, boolean hidden, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        boolean changed = hidden ? mHideDevOptsPackages.add(packageName) : mHideDevOptsPackages.remove(packageName);
+        String key = toKey(packageName, userId);
+        boolean changed = hidden ? mHideDevOptsPackages.add(key) : mHideDevOptsPackages.remove(key);
         if (changed) {
             scheduleSave();
         }
         return changed;
     }
 
-    public void setRestrictedGids(String packageName, int[] gids) {
+    public void setRestrictedGids(String packageName, int[] gids, int userId) {
         if (TextUtils.isEmpty(packageName)) return;
+        String key = toKey(packageName, userId);
         if (gids == null || gids.length == 0) {
-            mGidRestrictions.remove(packageName);
+            mGidRestrictions.remove(key);
         } else {
-            mGidRestrictions.put(packageName, gids);
+            mGidRestrictions.put(key, gids);
         }
         scheduleSave();
     }
 
-    public int[] getRestrictedGids(String packageName) {
+    public int[] getRestrictedGids(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return null;
-        return mGidRestrictions.get(packageName);
+        return mGidRestrictions.get(toKey(packageName, userId));
     }
 
-    public boolean isDataIsolationEnabled(String packageName) {
+    public boolean isDataIsolationEnabled(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        return mDataIsolationPackages.contains(packageName);
+        return mDataIsolationPackages.contains(toKey(packageName, userId));
     }
 
-    public boolean setDataIsolationEnabled(String packageName, boolean enabled) {
+    public boolean setDataIsolationEnabled(String packageName, boolean enabled, int userId) {
         if (TextUtils.isEmpty(packageName)) return false;
-        boolean changed = enabled ? mDataIsolationPackages.add(packageName) : mDataIsolationPackages.remove(packageName);
+        String key = toKey(packageName, userId);
+        boolean changed = enabled ? mDataIsolationPackages.add(key) : mDataIsolationPackages.remove(key);
         if (changed) {
             scheduleSave();
         }
@@ -150,9 +194,9 @@ public class SandboxIsolationRepository {
         JSONArray arr = config.optJSONArray(key);
         if (arr != null) {
             for (int i = 0; i < arr.length(); i++) {
-                String pkg = arr.optString(i);
-                if (!TextUtils.isEmpty(pkg)) {
-                    result.add(pkg);
+                String entry = arr.optString(i);
+                if (!TextUtils.isEmpty(entry)) {
+                    result.add(entry.contains(":") ? entry : entry + ":0");
                 }
             }
         }
@@ -168,14 +212,15 @@ public class SandboxIsolationRepository {
         Map<String, int[]> newMap = new HashMap<>();
         Iterator<String> keys = gidObj.keys();
         while (keys.hasNext()) {
-            String pkg = keys.next();
-            JSONArray arr = gidObj.optJSONArray(pkg);
+            String rawKey = keys.next();
+            String key = rawKey.contains(":") ? rawKey : rawKey + ":0";
+            JSONArray arr = gidObj.optJSONArray(rawKey);
             if (arr != null && arr.length() > 0) {
                 int[] gids = new int[arr.length()];
                 for (int i = 0; i < arr.length(); i++) {
                     gids[i] = arr.optInt(i);
                 }
-                newMap.put(pkg, gids);
+                newMap.put(key, gids);
             }
         }
         mGidRestrictions.keySet().removeIf(k -> !newMap.containsKey(k));
@@ -210,17 +255,17 @@ public class SandboxIsolationRepository {
         });
     }
 
-    private void broadcastPackageChange(String packageName) {
+    private void broadcastPackageChange(String packageName, int userId) {
         mBgHandler.post(() -> {
             try {
-                int uid = mContext.getPackageManager().getApplicationInfo(packageName, 0).uid;
+                int uid = mContext.getPackageManager().getApplicationInfoAsUser(packageName, 0, userId).uid;
                 Intent intent = new Intent(Intent.ACTION_PACKAGE_CHANGED);
                 intent.setData(Uri.fromParts("package", packageName, null));
                 intent.putExtra(Intent.EXTRA_UID, uid);
-                intent.putExtra(Intent.EXTRA_USER_HANDLE, UserHandle.getUserId(uid));
+                intent.putExtra(Intent.EXTRA_USER_HANDLE, userId);
                 intent.putExtra(Intent.EXTRA_CHANGED_COMPONENT_NAME_LIST, new String[]{packageName});
                 intent.putExtra(Intent.EXTRA_DONT_KILL_APP, true);
-                mContext.sendBroadcastAsUser(intent, UserHandle.of(UserHandle.getUserId(uid)));
+                mContext.sendBroadcastAsUser(intent, UserHandle.of(userId));
             } catch (Exception ignored) {
             }
         });

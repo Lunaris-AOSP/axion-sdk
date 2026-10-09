@@ -49,29 +49,39 @@ public class SettingsSpoofRepository {
         reload();
     }
 
-    public boolean isSettingsSpoofEnabled(String packageName) {
-        if (TextUtils.isEmpty(packageName)) return false;
-        return mSpoofSettingsMap.containsKey(packageName);
+    public static String toKey(String packageName, int userId) {
+        if (TextUtils.isEmpty(packageName)) return "";
+        int colon = packageName.indexOf(':');
+        if (colon >= 0) {
+            return packageName;
+        }
+        return packageName + ":" + userId;
     }
 
-    public boolean isSpoofSettingEnabled(String packageName, String settingKey) {
+    public boolean isSettingsSpoofEnabled(String packageName, int userId) {
+        if (TextUtils.isEmpty(packageName)) return false;
+        return mSpoofSettingsMap.containsKey(toKey(packageName, userId));
+    }
+
+    public boolean isSpoofSettingEnabled(String packageName, String settingKey, int userId) {
         if (TextUtils.isEmpty(packageName) || TextUtils.isEmpty(settingKey)) return false;
-        Set<String> settings = mSpoofSettingsMap.get(packageName);
+        Set<String> settings = mSpoofSettingsMap.get(toKey(packageName, userId));
         return settings != null && settings.contains(settingKey);
     }
 
-    public boolean setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled) {
+    public boolean setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled, int userId) {
         if (TextUtils.isEmpty(packageName) || TextUtils.isEmpty(settingKey)) return false;
+        String key = toKey(packageName, userId);
         boolean changed;
         if (enabled) {
-            Set<String> settings = mSpoofSettingsMap.computeIfAbsent(packageName, k -> ConcurrentHashMap.newKeySet());
+            Set<String> settings = mSpoofSettingsMap.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
             changed = settings.add(settingKey);
         } else {
-            Set<String> settings = mSpoofSettingsMap.get(packageName);
+            Set<String> settings = mSpoofSettingsMap.get(key);
             if (settings == null) return false;
             changed = settings.remove(settingKey);
             if (settings.isEmpty()) {
-                mSpoofSettingsMap.remove(packageName);
+                mSpoofSettingsMap.remove(key);
             }
         }
         if (changed) {
@@ -80,9 +90,9 @@ public class SettingsSpoofRepository {
         return changed;
     }
 
-    public List<String> getEnabledSpoofSettings(String packageName) {
+    public List<String> getEnabledSpoofSettings(String packageName, int userId) {
         if (TextUtils.isEmpty(packageName)) return Collections.emptyList();
-        Set<String> settings = mSpoofSettingsMap.get(packageName);
+        Set<String> settings = mSpoofSettingsMap.get(toKey(packageName, userId));
         if (settings == null || settings.isEmpty()) return Collections.emptyList();
         return new ArrayList<>(settings);
     }
@@ -97,8 +107,9 @@ public class SettingsSpoofRepository {
         Map<String, Set<String>> newMap = new HashMap<>();
         Iterator<String> keys = mapObj.keys();
         while (keys.hasNext()) {
-            String pkg = keys.next();
-            JSONArray arr = mapObj.optJSONArray(pkg);
+            String rawKey = keys.next();
+            String key = rawKey.contains(":") ? rawKey : rawKey + ":0";
+            JSONArray arr = mapObj.optJSONArray(rawKey);
             if (arr != null && arr.length() > 0) {
                 Set<String> settings = ConcurrentHashMap.newKeySet();
                 for (int i = 0; i < arr.length(); i++) {
@@ -106,7 +117,7 @@ public class SettingsSpoofRepository {
                     if (!TextUtils.isEmpty(s)) settings.add(s);
                 }
                 if (!settings.isEmpty()) {
-                    newMap.put(pkg, settings);
+                    newMap.put(key, settings);
                 }
             }
         }

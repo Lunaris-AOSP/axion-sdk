@@ -16,47 +16,47 @@ public class SandboxIsolationService {
         sInstance = this;
     }
 
-    public boolean isPackageSandboxed(String packageName) {
-        return mRepository.isPackageSandboxed(packageName);
+    public boolean isPackageSandboxed(String packageName, int userId) {
+        return mRepository.isPackageSandboxed(packageName, userId);
     }
 
-    public void addSandboxedPackage(String packageName) {
-        mRepository.setPackageSandboxed(packageName, true);
+    public void addSandboxedPackage(String packageName, int userId) {
+        mRepository.setPackageSandboxed(packageName, true, userId);
     }
 
-    public void removeSandboxedPackage(String packageName) {
-        mRepository.setPackageSandboxed(packageName, false);
+    public void removeSandboxedPackage(String packageName, int userId) {
+        mRepository.setPackageSandboxed(packageName, false, userId);
     }
 
-    public List<String> getSandboxedPackages() {
-        return mRepository.getSandboxedPackages();
+    public List<String> getSandboxedPackages(int userId) {
+        return mRepository.getSandboxedPackages(userId);
     }
 
-    public void setRestrictedGids(String packageName, int[] gids) {
-        mRepository.setRestrictedGids(packageName, gids);
+    public void setRestrictedGids(String packageName, int[] gids, int userId) {
+        mRepository.setRestrictedGids(packageName, gids, userId);
     }
 
-    public int[] getRestrictedGids(String packageName) {
-        return mRepository.getRestrictedGids(packageName);
+    public int[] getRestrictedGids(String packageName, int userId) {
+        return mRepository.getRestrictedGids(packageName, userId);
     }
 
-    public boolean isSandboxDataIsolationEnabled(String packageName) {
-        return mRepository.isDataIsolationEnabled(packageName);
+    public boolean isSandboxDataIsolationEnabled(String packageName, int userId) {
+        return mRepository.isDataIsolationEnabled(packageName, userId);
     }
 
-    public void setSandboxDataIsolationEnabled(String packageName, boolean enabled) {
-        mRepository.setDataIsolationEnabled(packageName, enabled);
+    public void setSandboxDataIsolationEnabled(String packageName, boolean enabled, int userId) {
+        mRepository.setDataIsolationEnabled(packageName, enabled, userId);
     }
 
-    public boolean isDevOptionsHidden(String packageName) {
-        return mRepository.isDevOptionsHidden(packageName);
+    public boolean isDevOptionsHidden(String packageName, int userId) {
+        return mRepository.isDevOptionsHidden(packageName, userId);
     }
 
-    public void setDevOptionsHidden(String packageName, boolean hidden) {
-        mRepository.setDevOptionsHidden(packageName, hidden);
+    public void setDevOptionsHidden(String packageName, boolean hidden, int userId) {
+        mRepository.setDevOptionsHidden(packageName, hidden, userId);
     }
 
-    public List<String> getDevOptionsHiddenPackages() {
-        return mRepository.getDevOptionsHiddenPackages();
+    public List<String> getDevOptionsHiddenPackages(int userId) {
+        return mRepository.getDevOptionsHiddenPackages(userId);
     }
 }
