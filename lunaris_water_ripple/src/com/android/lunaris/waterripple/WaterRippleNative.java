@@ -24,7 +24,7 @@ final class WaterRippleNative {
     }
 
     static native long create(int width, int height, float x, float y,
-            int animation, boolean highFrameRate, boolean fullscreen);
+            int animation, boolean highFrameRate, boolean fullscreen, boolean unlockEffect);
     static native boolean upload(long handle, int slot, Bitmap bitmap);
     static native boolean uploadBackground(long handle, HardwareBuffer buffer);
     static native boolean draw(long handle, long elapsedNs, float opacity, float timeScale);

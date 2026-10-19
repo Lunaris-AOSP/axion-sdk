@@ -28,6 +28,7 @@ struct UnlockRipple {
     UnlockClock clock;
     bool high_frame_rate;
     bool fullscreen;
+    bool unlock_effect;
 };
 
 /* A rounded, slightly wider impulse produces a fuller crest without the sharp
@@ -138,6 +139,10 @@ fail:
     return NULL;
 }
 
+void unlock_ripple_set_unlock_effect(UnlockRipple *ripple, bool enabled) {
+    if (ripple != NULL) ripple->unlock_effect = enabled && ripple->fullscreen;
+}
+
 bool unlock_ripple_upload(UnlockRipple *ripple, LleRippleTextureSlot slot,
         int width, int height, const void *rgba) {
     char error[512];
@@ -228,6 +233,11 @@ bool unlock_ripple_draw(UnlockRipple *ripple, uint64_t elapsed_ns, float opacity
         // Keep the shoulders of the crest visible as the broader wave settles.
         options.mask_low = 0.02f;
         options.mask_high = 0.12f;
+    }
+    if (ripple->unlock_effect) {
+        options.mask_low = 0.012f;
+        options.mask_high = 0.09f;
+        options.water_surface = true;
     }
     options.opacity = fminf(1, fmaxf(0, opacity));
     char error[512];

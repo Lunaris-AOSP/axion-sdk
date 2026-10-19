@@ -8,6 +8,7 @@ typedef struct UnlockRipple UnlockRipple;
 /* All operations belong to one thread with a current GLES2 context. */
 UnlockRipple *unlock_ripple_create(int width, int height, float x, float y,
         bool high_frame_rate, bool fullscreen);
+void unlock_ripple_set_unlock_effect(UnlockRipple *ripple, bool enabled);
 bool unlock_ripple_upload(UnlockRipple *ripple, LleRippleTextureSlot slot,
         int width, int height, const void *rgba);
 /* Takes ownership of a GL_TEXTURE_2D containing the current display capture. */

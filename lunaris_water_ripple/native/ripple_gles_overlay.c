@@ -137,6 +137,7 @@ void lle_ripple_overlay_default_options(LleRippleOverlayOptions *options) {
     options->mask_low = 0.035f;
     options->mask_high = 0.18f;
     options->opacity = 1.0f;
+    options->water_surface = false;
 }
 
 void lle_ripple_overlay_abandon(LleRippleOverlay *overlay) {
@@ -330,6 +331,9 @@ static bool render_transparent_delta(
     glUniform1f(glGetUniformLocation(program, "uOverlayMaskLow"), options->mask_low);
     glUniform1f(glGetUniformLocation(program, "uOverlayMaskHigh"), options->mask_high);
     glUniform1f(glGetUniformLocation(program, "uOverlayOpacity"), options->opacity);
+    glUniform1i(glGetUniformLocation(program, "uWaterSurface"), options->water_surface);
+    glUniform2f(glGetUniformLocation(program, "uViewportSize"),
+            (GLfloat) args->viewport_width, (GLfloat) args->viewport_height);
 
     if (args->with_ink) {
         glUniform2f(

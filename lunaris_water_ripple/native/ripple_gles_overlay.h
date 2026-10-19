@@ -18,6 +18,7 @@ typedef struct LleRippleOverlayOptions {
     float mask_low;
     float mask_high;
     float opacity;
+    bool water_surface;
 } LleRippleOverlayOptions;
 
 typedef struct LleRippleOverlay {

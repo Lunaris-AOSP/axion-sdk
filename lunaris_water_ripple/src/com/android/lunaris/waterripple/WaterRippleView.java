@@ -67,6 +67,7 @@ public final class WaterRippleView extends View {
     private int mAnimation;
     private boolean mHighFrameRate;
     private boolean mFullscreen;
+    private boolean mUnlockEffect;
     private boolean mPlayed;
 
     public WaterRippleView(Context context) {
@@ -79,6 +80,20 @@ public final class WaterRippleView extends View {
     public void play(float x, float y, long durationMs,
             int animation, boolean highFrameRate, boolean fullscreen,
             Runnable onEnd, Runnable onFailure) {
+        playInternal(x, y, durationMs, animation, highFrameRate, fullscreen, false,
+                onEnd, onFailure);
+    }
+
+    public void playUnlock(float x, float y, long durationMs,
+            int animation, boolean highFrameRate, boolean fullscreen,
+            Runnable onEnd, Runnable onFailure) {
+        playInternal(x, y, durationMs, animation, highFrameRate, fullscreen, true,
+                onEnd, onFailure);
+    }
+
+    private void playInternal(float x, float y, long durationMs,
+            int animation, boolean highFrameRate, boolean fullscreen, boolean unlockEffect,
+            Runnable onEnd, Runnable onFailure) {
         if (mPlayed) {
             throw new IllegalStateException("Use a new WaterRippleView for each animation");
         }
@@ -90,6 +105,7 @@ public final class WaterRippleView extends View {
         mAnimation = animation;
         mHighFrameRate = highFrameRate;
         mFullscreen = fullscreen;
+        mUnlockEffect = unlockEffect && fullscreen && animation == EFFECT_WATER;
         mDurationMs = Math.max(1, Math.round(durationMs * ValueAnimator.getDurationScale()));
         mStartNs = System.nanoTime();
         if (!ValueAnimator.areAnimatorsEnabled() || !isHardwareAccelerated()
@@ -250,7 +266,7 @@ public final class WaterRippleView extends View {
                         .build();
                 initEgl();
                 mNativeHandle = WaterRippleNative.create(mWidth, mHeight, mNormalizedX, mNormalizedY,
-                        mAnimation, mHighFrameRate, mFullscreen);
+                        mAnimation, mHighFrameRate, mFullscreen, mUnlockEffect);
                 if (mNativeHandle == 0) throw new IllegalStateException("Native initialization failed");
                 if (mAnimation == EFFECT_WATERCOLOR) {
                     uploadResource(1, R.drawable.watercolor_mask1);

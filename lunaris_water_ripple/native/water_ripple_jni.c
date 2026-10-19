@@ -56,13 +56,14 @@ static bool upload_bitmap(JNIEnv *env, UnlockEffect *effect, jobject bitmap, int
 JNIEXPORT jlong JNICALL
 Java_com_android_lunaris_waterripple_WaterRippleNative_create(
         JNIEnv *env, jclass clazz, jint width, jint height, jfloat x, jfloat y,
-        jint animation, jboolean high_frame_rate, jboolean fullscreen) {
+        jint animation, jboolean high_frame_rate, jboolean fullscreen, jboolean unlock_effect) {
     (void) env;
     (void) clazz;
     UnlockEffect *effect = calloc(1, sizeof(*effect));
     if (effect == NULL) return 0;
     if (animation == 1) {
         effect->water = unlock_ripple_create(width, height, x, y, high_frame_rate, fullscreen);
+        unlock_ripple_set_unlock_effect(effect->water, unlock_effect);
     } else if (animation == 2) {
         effect->watercolor = unlock_watercolor_create(width, height, x, y, high_frame_rate);
     }
