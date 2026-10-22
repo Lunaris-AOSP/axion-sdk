@@ -104,6 +104,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     }
 
     init {
+        view.setTagInternal(com.android.internal.R.id.ax_dialog_blur_owned, true)
         applyBlurSettings()
     }
 

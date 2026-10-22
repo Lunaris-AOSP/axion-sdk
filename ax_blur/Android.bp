@@ -2,6 +2,11 @@ package {
     default_visibility: ["//visibility:public"],
 }
 
+filegroup {
+    name: "ax_dialog_blur_framework_sources",
+    srcs: ["framework/**/*.java"],
+}
+
 android_library {
     name: "ax_blur",
     manifest: "AndroidManifest.xml",

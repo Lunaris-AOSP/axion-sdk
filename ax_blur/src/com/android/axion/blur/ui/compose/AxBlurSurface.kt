@@ -37,7 +37,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -159,6 +161,7 @@ fun AxBlurSurface(
                 tintColor = resolvedTintColor,
                 cornerRadius = cornerRadius,
                 settingsSpec = settingsSpec,
+                shape = shape,
             ),
         contentAlignment = contentAlignment,
         content = content,
@@ -172,6 +175,7 @@ fun Modifier.axBlurBackground(
     tintColor: Color,
     cornerRadius: Dp = Dp.Unspecified,
     settingsSpec: AxBackdropBlurSettingsSpec = AxBackdropBlurSettingsSpec.system(),
+    shape: Shape? = null,
 ): Modifier {
     val density = LocalDensity.current
     val view = LocalView.current
@@ -183,6 +187,7 @@ fun Modifier.axBlurBackground(
         }
     }
     val tintArgb = tintColor.toArgb()
+    val cornerRadii = remember { FloatArray(8) }
     val requestedCornerRadiusPx = if (cornerRadius.isSpecified) {
         with(density) { cornerRadius.toPx() }
     } else {
@@ -203,6 +208,7 @@ fun Modifier.axBlurBackground(
     return axBlurFrameTracking(blurEnabled).drawWithContent {
         val width = size.width.roundToInt()
         val height = size.height.roundToInt()
+        val outline = shape?.createOutline(size, layoutDirection, this)
         val cornerRadiusPx = if (requestedCornerRadiusPx.isFinite()) {
             requestedCornerRadiusPx
         } else {
@@ -212,24 +218,53 @@ fun Modifier.axBlurBackground(
             var result = false
             blur.setOverlayColor(tintArgb)
             drawIntoCanvas { canvas ->
-                result = blur.draw(
-                    canvas.nativeCanvas,
-                    0,
-                    0,
-                    width,
-                    height,
-                    cornerRadiusPx,
-                )
+                result = when (outline) {
+                    is Outline.Rounded -> {
+                        val rect = outline.roundRect
+                        cornerRadii[0] = rect.topLeftCornerRadius.x
+                        cornerRadii[1] = rect.topLeftCornerRadius.y
+                        cornerRadii[2] = rect.topRightCornerRadius.x
+                        cornerRadii[3] = rect.topRightCornerRadius.y
+                        cornerRadii[4] = rect.bottomRightCornerRadius.x
+                        cornerRadii[5] = rect.bottomRightCornerRadius.y
+                        cornerRadii[6] = rect.bottomLeftCornerRadius.x
+                        cornerRadii[7] = rect.bottomLeftCornerRadius.y
+                        blur.draw(
+                            canvas.nativeCanvas,
+                            rect.left.roundToInt(), rect.top.roundToInt(),
+                            rect.right.roundToInt(), rect.bottom.roundToInt(),
+                            cornerRadii,
+                        )
+                    }
+                    is Outline.Rectangle -> {
+                        val rect = outline.rect
+                        blur.draw(
+                            canvas.nativeCanvas,
+                            rect.left.roundToInt(), rect.top.roundToInt(),
+                            rect.right.roundToInt(), rect.bottom.roundToInt(),
+                            0f,
+                        )
+                    }
+                    else -> blur.draw(
+                        canvas.nativeCanvas,
+                        0, 0, width, height,
+                        cornerRadiusPx,
+                    )
+                }
             }
             result
         } else {
             false
         }
         if (!drewBlur) {
-            drawRoundRect(
-                color = fallbackColor,
-                cornerRadius = CornerRadius(cornerRadiusPx),
-            )
+            if (outline != null) {
+                drawOutline(outline, color = fallbackColor)
+            } else {
+                drawRoundRect(
+                    color = fallbackColor,
+                    cornerRadius = CornerRadius(cornerRadiusPx),
+                )
+            }
         }
         drawContent()
     }
