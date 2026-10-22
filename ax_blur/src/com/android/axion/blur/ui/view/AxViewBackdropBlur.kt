@@ -490,7 +490,8 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         )
         drawableAlphaStates[key] = alphaState
         val drawAlpha = resolvedDrawableAlpha(alphaState)
-        if (drawAlpha <= 0) {
+        val crossWindowAlpha = resolvedCrossWindowAlpha(alphaState)
+        if (crossWindowAlpha <= 0) {
             clearKey(key)
             return true
         }
@@ -507,7 +508,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
                 bottom,
                 cornerRadii,
                 cornerRadius,
-                drawAlpha,
+                crossWindowAlpha,
                 key,
                 clipPath,
             )
@@ -546,7 +547,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
                 bottom,
                 cornerRadii,
                 cornerRadius,
-                drawAlpha,
+                crossWindowAlpha,
                 key,
                 clipPath,
             )
@@ -583,6 +584,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         if (!crossWindowBlurEnabled) return false
         if (!AxBlurSupport.supportsCrossWindowBlur()) return false
         val blurDrawable = blurDrawableFor(key) ?: return false
+        blurDrawable.setApplyRenderNodeAlpha(true)
         blurDrawable.setVisible(true, false)
         blurDrawable.setBlurRadius(blurRadiusPx.roundToInt())
         blurDrawable.alpha = alpha
@@ -936,6 +938,15 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         return drawAlpha
     }
 
+    private fun resolvedCrossWindowAlpha(state: DrawableAlphaState): Int {
+        var drawAlpha = state.alpha.coerceIn(0, 255)
+        val target = state.target
+        if (target != null) {
+            drawAlpha = scaledDrawableAlpha(drawAlpha, targetLocalAlpha(target) ?: return 0)
+        }
+        return scaledDrawableAlpha(drawAlpha, windowAlpha())
+    }
+
     private fun updateDrawableAlphas(): Boolean {
         var changed = false
         val iterator = drawables.entries.iterator()
@@ -949,7 +960,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
                 changed = true
                 continue
             }
-            val alpha = resolvedDrawableAlpha(state)
+            val alpha = resolvedCrossWindowAlpha(state)
             if (alpha <= 0) {
                 deactivateCrossWindowBlurDrawable(entry.value)
                 drawableAlphaStates.remove(entry.key)
@@ -1008,7 +1019,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         if (sourceAlpha <= 0) return 0
         return (sourceAlpha * factor.sanitizedAlphaFactor())
             .roundToInt()
-            .coerceIn(1, 255)
+            .coerceIn(0, 255)
     }
 
     private fun trackView(target: View) {
