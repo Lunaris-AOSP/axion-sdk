@@ -104,28 +104,30 @@ class AxWindowBlurController @JvmOverloads constructor(
             0
         }
         val alpha = if (supportedRadius > 0) surfaceAlpha.sanitizedAlpha() else 255
-        clearWindowBlur()
         applyWindowBlur(supportedRadius)
         applySurfaceBlur(supportedRadius, alpha)
     }
 
     private fun applyWindowBlur(radius: Int) {
-        if (!blurBehind || radius <= 0) return
-        setWindowBackgroundBlurRadius(radius)
+        val backgroundRadius = if (blurBehind) radius.coerceAtLeast(0) else 0
+        setWindowBackgroundBlurRadius(backgroundRadius)
+        val behindRadius =
+            (backgroundRadius * blurBehindRadiusScale).roundToInt().coerceAtLeast(0)
         val attrs = window.attributes
-        attrs.setBlurBehindRadius(
-            (radius * blurBehindRadiusScale).roundToInt().coerceAtLeast(0),
-        )
-        attrs.flags = attrs.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-        window.attributes = attrs
+        val flags = if (backgroundRadius > 0) {
+            attrs.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+        } else {
+            attrs.flags and WindowManager.LayoutParams.FLAG_BLUR_BEHIND.inv()
+        }
+        if (attrs.blurBehindRadius != behindRadius || attrs.flags != flags) {
+            attrs.setBlurBehindRadius(behindRadius)
+            attrs.flags = flags
+            window.attributes = attrs
+        }
     }
 
     private fun clearWindowBlur() {
-        setWindowBackgroundBlurRadius(0)
-        val attrs = window.attributes
-        attrs.setBlurBehindRadius(0)
-        attrs.flags = attrs.flags and WindowManager.LayoutParams.FLAG_BLUR_BEHIND.inv()
-        window.attributes = attrs
+        applyWindowBlur(0)
     }
 
     private fun setWindowBackgroundBlurRadius(radius: Int) {
@@ -194,7 +196,7 @@ class AxWindowBlurController @JvmOverloads constructor(
             val blur = blurDrawable ?: view.viewRootImpl?.createBackgroundBlurDrawable()?.also {
                 blurDrawable = it
             } ?: run {
-                surfaceBackground.applyAlpha(alpha)
+                restore(view)
                 return
             }
             blur.setVisible(true, false)

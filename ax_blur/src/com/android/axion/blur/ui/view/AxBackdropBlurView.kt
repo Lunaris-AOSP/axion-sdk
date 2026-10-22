@@ -360,10 +360,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     private fun drawBackdrop(canvas: Canvas) {
-        if (!enabled) {
-            clear()
-            return
-        }
+        if (!enabled) return
         if (!shouldDraw()) return
 
         if (preferSourceBlur) {
@@ -406,12 +403,11 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     private fun shouldRecordSource(source: View): Boolean {
-        val nextRecord = sourceRecordFor(source)
         if (sourceBlurUpdateSuppressed && sourceBlurRecorded) return false
         return forceSourceBlurUpdate ||
             sourceBlurDirty ||
             !sourceBlurRecorded ||
-            recordedSourceState != nextRecord ||
+            recordedSourceState != sourceRecordFor(source) ||
             source.isDirty
     }
 

@@ -637,11 +637,10 @@ private class AxBackdropBlurNode(
             }
             val blurRadius = if (settings.enabled) requestedBlurRadius else 0f
             val effect = blurEffect(blurRadius)
-            val tint = resolveColor(style.tint, AxBlurColors.tint(context))
-            val fallbackColor = resolveColor(
-                style.fallbackColor,
-                AxBlurColors.fallback(context),
-            )
+            val tint = resolveColor(style.tint) { AxBlurColors.tint(context) }
+            val fallbackColor = resolveColor(style.fallbackColor) {
+                AxBlurColors.fallback(context)
+            }
             val cornerRadius = if (style.cornerRadius.isSpecified) {
                 style.cornerRadius.toPx()
             } else {
@@ -883,8 +882,8 @@ private class AxBackdropBlurNode(
         }
     }
 
-    private fun resolveColor(color: Color, defaultColor: Int): Color {
-        return if (color.isSpecified) color else Color(defaultColor)
+    private inline fun resolveColor(color: Color, defaultColor: () -> Int): Color {
+        return if (color.isSpecified) color else Color(defaultColor())
     }
 
     private fun updateSettings(interactor: AxBackdropBlurInteractor) {

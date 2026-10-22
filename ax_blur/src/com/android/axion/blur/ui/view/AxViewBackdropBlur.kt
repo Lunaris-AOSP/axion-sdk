@@ -484,13 +484,19 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         if (targetAlphaSource != null) {
             trackView(targetAlphaSource)
         }
-        val alphaState = DrawableAlphaState(
-            alpha.coerceIn(0, 255),
-            applyViewAlpha,
-            targetAlphaSource,
-        )
-        drawableAlphaStates[key] = alphaState
-        val drawAlpha = resolvedDrawableAlpha(alphaState)
+        val requestedAlpha = alpha.coerceIn(0, 255)
+        val previousAlphaState = drawableAlphaStates[key]
+        val alphaState = if (previousAlphaState != null &&
+            previousAlphaState.alpha == requestedAlpha &&
+            previousAlphaState.applyViewAlpha == applyViewAlpha &&
+            previousAlphaState.target === targetAlphaSource
+        ) {
+            previousAlphaState
+        } else {
+            DrawableAlphaState(requestedAlpha, applyViewAlpha, targetAlphaSource).also {
+                drawableAlphaStates[key] = it
+            }
+        }
         val crossWindowAlpha = resolvedCrossWindowAlpha(alphaState)
         if (crossWindowAlpha <= 0) {
             clearKey(key)
@@ -525,7 +531,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
                 bottom,
                 cornerRadii,
                 cornerRadius,
-                drawAlpha,
+                resolvedDrawableAlpha(alphaState),
                 clipPath,
                 drawOverlay = !drewCrossWindow,
             )
@@ -564,7 +570,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
             bottom,
             cornerRadii,
             cornerRadius,
-            drawAlpha,
+            resolvedDrawableAlpha(alphaState),
             clipPath,
         )
     }
@@ -1220,8 +1226,9 @@ class AxViewBackdropBlur @JvmOverloads constructor(
 
     private fun applyBlurSettings() {
         if (useSettingsBlurRadius) {
-            globalBlurEnabled = settingsInteractor.settings().enabled
-            updateBlurRadiusPx(settingsInteractor.settings().blurRadiusPx)
+            val settings = settingsInteractor.settings()
+            globalBlurEnabled = settings.enabled
+            updateBlurRadiusPx(settings.blurRadiusPx)
         }
     }
 
