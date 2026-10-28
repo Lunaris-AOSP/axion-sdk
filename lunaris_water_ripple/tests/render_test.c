@@ -177,6 +177,105 @@ static void watercolor(int hz) {
     printf("Watercolor %d Hz: live colors, paint continuity and transparent finish passed\n", hz);
 }
 
+/* Check the composited image, not just the presence of colored overlay pixels:
+ * a white tint can pass the live-background checks without looking like water. */
+static void glass_surface(bool fullscreen, bool unlock_effect, float time_scale) {
+    enum { SIZE = 256 };
+    UnlockRipple *ripple = unlock_ripple_create(SIZE, SIZE, 0.5f, 0.5f, true, fullscreen);
+    assert(ripple);
+    unlock_ripple_set_unlock_effect(ripple, unlock_effect);
+    int tw, th;
+    void *reflection = asset("water_ripple_reflection", &tw, &th);
+    assert(unlock_ripple_upload(ripple, LLE_RIPPLE_TEXTURE_WATER, tw, th, reflection));
+    free(reflection);
+    const unsigned char gray[] = {128, 128, 128, 255};
+    assert(unlock_ripple_upload(ripple, LLE_RIPPLE_TEXTURE_BACKGROUND, 1, 1, gray));
+    const int frames = (int) ceilf(12 / time_scale);
+    const uint64_t probe_time = (uint64_t) frames * UINT64_C(1000000000) / 120;
+    for (int frame = 0; frame <= frames; ++frame) {
+        assert(unlock_ripple_draw(ripple, (uint64_t) frame * UINT64_C(1000000000) / 120,
+                1, time_scale));
+    }
+    read_frame(SIZE, SIZE, false);
+    unsigned char *full = malloc(SIZE * SIZE * 4);
+    assert(full);
+    memcpy(full, pixels, SIZE * SIZE * 4);
+    int light = 0, dark = 0;
+    double signed_delta = 0, absolute_delta = 0;
+    for (int i = 0; i < SIZE * SIZE; ++i) {
+        const unsigned char *p = pixels + i * 4;
+        const double delta = (p[0] + p[1] + p[2]) / 3.0 - p[3] * (128.0 / 255.0);
+        if (delta > 4) ++light;
+        if (delta < -4) ++dark;
+        signed_delta += delta;
+        absolute_delta += fabs(delta);
+        if (i / SIZE < 16 && i % SIZE < 16) assert(p[3] == 0);
+    }
+    printf("Glass fullscreen=%d unlock=%d speed=%.3f: light=%d dark=%d brightness bias=%.3f\n",
+            fullscreen, unlock_effect, time_scale, light, dark, signed_delta / absolute_delta);
+    assert(light > 8 && dark > 8);
+    assert(fabs(signed_delta) < absolute_delta * 0.35);
+    assert(unlock_ripple_draw(ripple, probe_time, 0.4f, time_scale));
+    read_frame(SIZE, SIZE, false);
+    for (int i = 0; i < SIZE * SIZE * 4; ++i) {
+        assert(fabsf(pixels[i] - full[i] * 0.4f) <= 1.5f);
+    }
+
+    /* Bright stripes must move into dark areas, and dark stripes into bright
+     * areas. Adding a reflection or tint cannot satisfy both directions. */
+    unsigned char *stripes = malloc(SIZE * SIZE * 4);
+    assert(stripes);
+    for (int y = 0; y < SIZE; ++y) {
+        for (int x = 0; x < SIZE; ++x) {
+            unsigned char *p = stripes + (y * SIZE + x) * 4;
+            p[0] = p[1] = p[2] = x % 16 < 8 ? 24 : 232;
+            p[3] = 255;
+        }
+    }
+    assert(unlock_ripple_upload(ripple, LLE_RIPPLE_TEXTURE_BACKGROUND, SIZE, SIZE, stripes));
+    assert(unlock_ripple_draw(ripple, probe_time, 1, time_scale));
+    read_frame(SIZE, SIZE, false);
+    light = dark = 0;
+    for (int i = 0; i < SIZE * SIZE; ++i) {
+        const unsigned char *p = pixels + i * 4;
+        const float base = stripes[i * 4];
+        const float delta = p[0] - p[3] * (base / 255.0f);
+        if (delta > 64) ++light;
+        if (delta < -64) ++dark;
+    }
+    printf("Glass refraction: bright into dark=%d dark into bright=%d\n", light, dark);
+    assert(light > 8 && dark > 8);
+    for (int i = 0; i < ripple->stride * ripple->detail_rows; ++i) ripple->heights[i] = 5;
+    assert(unlock_ripple_draw(ripple, probe_time, 1, time_scale));
+    read_frame(SIZE, SIZE, true);
+    free(stripes);
+    free(full);
+    unlock_ripple_destroy(ripple);
+}
+
+static void smooth_surface_geometry(int width, int height) {
+    UnlockRipple *ripple = unlock_ripple_create(width, height, 0.5f, 0.5f, true, true);
+    assert(ripple);
+    for (int y = 0; y < ripple->detail_rows; ++y) {
+        for (int x = 0; x < ripple->stride; ++x) {
+            const float dx = x - ripple->padding - (ripple->columns - 1) * 0.5f;
+            const float dy = y - ripple->padding - (ripple->rows - 1) * 0.5f;
+            ripple->heights[y * ripple->stride + x] = 0.002f * dx * dx + 0.003f * dy * dy;
+        }
+    }
+    update_mesh(ripple);
+    for (int vertex = 0; vertex < ripple->mesh_columns * ripple->mesh_rows; ++vertex) {
+        const float x = 2 * ripple->vertices[vertex * 3];
+        const float y = -2 * ripple->vertices[vertex * 3 + 1];
+        const float *h = ripple->gpu_heights + vertex * 3;
+        assert(fabsf(h[0] - (0.002f * x * x + 0.003f * y * y)) < 0.0001f);
+        assert(fabsf(h[0] - h[1] - 0.004f * x) < 0.0001f);
+        assert(fabsf(h[0] - h[2] + 0.006f * y) < 0.0001f);
+    }
+    printf("Smooth surface %dx%d: curvature and slope alignment passed\n", width, height);
+    unlock_ripple_destroy(ripple);
+}
+
 int main(int argc, char **argv) {
     setbuf(stdout, NULL);
     assert(argc == 2);
@@ -197,6 +296,15 @@ int main(int argc, char **argv) {
     const EGLint surface_attrs[] = {EGL_WIDTH, 320, EGL_HEIGHT, 320, EGL_NONE};
     EGLSurface surface = eglCreatePbufferSurface(display, config, surface_attrs);
     assert(eglMakeCurrent(display, surface, surface, context));
+    smooth_surface_geometry(180, 320);
+    smooth_surface_geometry(320, 180);
+    smooth_surface_geometry(256, 256);
+    glass_surface(false, false, 1);
+    glass_surface(false, true, 1);
+    glass_surface(true, false, 1);
+    glass_surface(true, true, 1);
+    glass_surface(true, false, 800.0f / 2090);
+    glass_surface(true, true, 800.0f / 1400);
     const int rates[] = {60, 90, 120, 144};
     const float origins[][2] = {{0.5f, 0.5f}, {0, 0.5f}, {1, 0.5f}, {0.5f, 0}, {0.5f, 1},
             {0, 0}, {1, 0}, {0, 1}, {1, 1}};
@@ -204,6 +312,7 @@ int main(int argc, char **argv) {
         for (int side = 0; side < 4; ++side) gentle_edge_rebound(rates[i], side);
         for (size_t j = 0; j < sizeof(origins) / sizeof(origins[0]); ++j) {
             water(180, 320, origins[j][0], origins[j][1], rates[i], true, 1);
+            water(180, 320, origins[j][0], origins[j][1], rates[i], false, 1);
         }
         water(320, 180, 0.5f, 0.5f, rates[i], true, 1);
         water(256, 256, 0.5f, 0.5f, rates[i], true, 1);

@@ -8,7 +8,9 @@
 #include <stdlib.h>
 
 /* Padding keeps an impulse at a physical display edge inside the solver domain. */
-enum { LOCAL_PADDING = 4, EDGE_PADDING = 8, MAX_CELLS = 96 };
+enum { LOCAL_PADDING = 6, EDGE_PADDING = 8, MAX_CELLS = 96, MESH_SUBDIVISIONS = 2 };
+_Static_assert((MAX_CELLS * MESH_SUBDIVISIONS + 1) * (MAX_CELLS * MESH_SUBDIVISIONS + 1)
+        <= UINT16_MAX, "Water mesh must fit in 16-bit indices");
 
 struct UnlockRipple {
     LleRippleGles gles;
@@ -22,6 +24,8 @@ struct UnlockRipple {
     uint16_t *indices;
     int columns;
     int rows;
+    int mesh_columns;
+    int mesh_rows;
     int stride;
     int detail_rows;
     int padding;
@@ -31,11 +35,10 @@ struct UnlockRipple {
     bool unlock_effect;
 };
 
-/* A rounded, slightly wider impulse produces a fuller crest without the sharp
- * center and high-frequency ripples of a larger cone. Fullscreen padding keeps
- * the entire impulse inside the solver, including origins on edges and corners. */
-static void inject_fullscreen_wave(UnlockRipple *ripple, float cell_x, float cell_y) {
-    const float radius = 7.0f;
+/* A rounded impulse with a shallow trough produces a crest followed by smaller
+ * ripples. Both modes pad the whole impulse, including at edges and corners. */
+static void inject_wave(UnlockRipple *ripple, float cell_x, float cell_y) {
+    const float radius = ripple->fullscreen ? 7.0f : 4.5f;
     for (int y = (int) floorf(cell_y - radius); y <= (int) ceilf(cell_y + radius); ++y) {
         for (int x = (int) floorf(cell_x - radius); x <= (int) ceilf(cell_x + radius); ++x) {
             const float dx = x - cell_x;
@@ -69,16 +72,18 @@ UnlockRipple *unlock_ripple_create(int width, int height, float x, float y,
     ripple->fullscreen = fullscreen;
     /* Square cells in display pixels, including tablets, rotations and folded displays.
      * Use an orthographic mesh without the stock S3 crop/shear so HAL coordinates map
-     * exactly to the visible wave origin. The recovered solver and shaders are unchanged. */
+     * exactly to the visible wave origin. */
     const int longest = width > height ? width : height;
     ripple->columns = 2 * (int) fmaxf(8, (float) MAX_CELLS * width / longest / 2) + 1;
     ripple->rows = 2 * (int) fmaxf(8, (float) MAX_CELLS * height / longest / 2) + 1;
+    ripple->mesh_columns = (ripple->columns - 1) * MESH_SUBDIVISIONS + 1;
+    ripple->mesh_rows = (ripple->rows - 1) * MESH_SUBDIVISIONS + 1;
     ripple->padding = fullscreen ? EDGE_PADDING : LOCAL_PADDING;
     ripple->stride = ripple->columns + 2 * ripple->padding;
     ripple->detail_rows = ripple->rows + 2 * ripple->padding;
-    const int count = ripple->columns * ripple->rows;
+    const int count = ripple->mesh_columns * ripple->mesh_rows;
     const int detail_count = ripple->stride * ripple->detail_rows;
-    const int index_count = (ripple->columns - 1) * (ripple->rows - 1) * 6;
+    const int index_count = (ripple->mesh_columns - 1) * (ripple->mesh_rows - 1) * 6;
     ripple->vertices = calloc((size_t) count * 3, sizeof(float));
     ripple->gpu_heights = calloc((size_t) count * 3, sizeof(float));
     ripple->heights = calloc((size_t) detail_count, sizeof(float));
@@ -90,18 +95,18 @@ UnlockRipple *unlock_ripple_create(int width, int height, float x, float y,
     const int mesh_width = (ripple->columns - 1) / 2;
     const int mesh_height = (ripple->rows - 1) / 2;
     int offset = 0;
-    for (int row = 0; row < ripple->rows; ++row) {
-        for (int col = 0; col < ripple->columns; ++col) {
-            const int vertex = row * ripple->columns + col;
-            ripple->vertices[vertex * 3] = col * 0.5f - mesh_width * 0.5f;
-            ripple->vertices[vertex * 3 + 1] = mesh_height * 0.5f - row * 0.5f;
-            if (row + 1 < ripple->rows && col + 1 < ripple->columns) {
+    for (int row = 0; row < ripple->mesh_rows; ++row) {
+        for (int col = 0; col < ripple->mesh_columns; ++col) {
+            const int vertex = row * ripple->mesh_columns + col;
+            ripple->vertices[vertex * 3] = col * (0.5f / MESH_SUBDIVISIONS) - mesh_width * 0.5f;
+            ripple->vertices[vertex * 3 + 1] = mesh_height * 0.5f - row * (0.5f / MESH_SUBDIVISIONS);
+            if (row + 1 < ripple->mesh_rows && col + 1 < ripple->mesh_columns) {
                 ripple->indices[offset++] = vertex;
-                ripple->indices[offset++] = vertex + ripple->columns;
+                ripple->indices[offset++] = vertex + ripple->mesh_columns;
                 ripple->indices[offset++] = vertex + 1;
                 ripple->indices[offset++] = vertex + 1;
-                ripple->indices[offset++] = vertex + ripple->columns;
-                ripple->indices[offset++] = vertex + ripple->columns + 1;
+                ripple->indices[offset++] = vertex + ripple->mesh_columns;
+                ripple->indices[offset++] = vertex + ripple->mesh_columns + 1;
             }
         }
     }
@@ -115,7 +120,7 @@ UnlockRipple *unlock_ripple_create(int width, int height, float x, float y,
         .height_float_count = count * 3, .index_count = index_count,
         .mvp = ripple->mvp, .viewport_width = width, .viewport_height = height,
         .mesh_width = mesh_width, .mesh_height = mesh_height,
-        .detail_width = ripple->columns, .detail_height = ripple->rows,
+        .detail_width = ripple->mesh_columns, .detail_height = ripple->mesh_rows,
         .refractive_index = 0.93f, .reflection_ratio = fullscreen ? 0.17f : 0.13f,
         .alpha_ratio_1 = 1, .alpha_ratio_2 = 1, .fresnel_ratio = 0.1f,
         .specular_ratio = 0.5f, .exponent_ratio = 20,
@@ -126,13 +131,7 @@ UnlockRipple *unlock_ripple_create(int width, int height, float x, float y,
 
     const float cell_x = ripple->padding + fminf(1, fmaxf(0, x)) * (ripple->columns - 1);
     const float cell_y = ripple->padding + fminf(1, fmaxf(0, y)) * (ripple->rows - 1);
-    if (fullscreen) {
-        inject_fullscreen_wave(ripple, cell_x, cell_y);
-    } else {
-        lle_ripple_inject(ripple->velocity, 50, 50, ripple->stride, ripple->detail_rows,
-                (cell_x / ripple->stride - 0.5f) * 50,
-                (cell_y / ripple->detail_rows - 0.5f) * 50, 2.0f);
-    }
+    inject_wave(ripple, cell_x, cell_y);
     return ripple;
 fail:
     unlock_ripple_destroy(ripple);
@@ -197,38 +196,66 @@ static void damp_edges(UnlockRipple *ripple, float step) {
     }
 }
 
+/* Catmull-Rom interpolation retains the simulated heights at grid points and
+ * joins their slopes smoothly. Linear subdivision would preserve the same
+ * angular normals around the first, small crest. Padding covers the 4x4 stencil. */
+static float interpolate(float a, float b, float c, float d, float t) {
+    return b + 0.5f * t * (c - a + t * (2 * a - 5 * b + 4 * c - d
+            + t * (3 * (b - c) + d - a)));
+}
+
+static float derivative(float a, float b, float c, float d, float t) {
+    return 0.5f * (c - a) + t * (2 * a - 5 * b + 4 * c - d
+            + 1.5f * t * (3 * (b - c) + d - a));
+}
+
+static void update_mesh(UnlockRipple *ripple) {
+    for (int row = 0; row < ripple->mesh_rows; ++row) {
+        const int y = row / MESH_SUBDIVISIONS + ripple->padding;
+        const float ty = (float) (row % MESH_SUBDIVISIONS) / MESH_SUBDIVISIONS;
+        for (int col = 0; col < ripple->mesh_columns; ++col) {
+            const int x = col / MESH_SUBDIVISIONS + ripple->padding;
+            const float tx = (float) (col % MESH_SUBDIVISIONS) / MESH_SUBDIVISIONS;
+            float h[4], dx[4];
+            for (int k = 0; k < 4; ++k) {
+                const float *p = ripple->heights + (y + k - 1) * ripple->stride + x - 1;
+                h[k] = interpolate(p[0], p[1], p[2], p[3], tx);
+                dx[k] = derivative(p[0], p[1], p[2], p[3], tx);
+            }
+            const float height = interpolate(h[0], h[1], h[2], h[3], ty);
+            const int dst = (row * ripple->mesh_columns + col) * 3;
+            ripple->gpu_heights[dst] = height;
+            ripple->gpu_heights[dst + 1] = height - interpolate(dx[0], dx[1], dx[2], dx[3], ty);
+            ripple->gpu_heights[dst + 2] = height + derivative(h[0], h[1], h[2], h[3], ty);
+        }
+    }
+}
+
 bool unlock_ripple_draw(UnlockRipple *ripple, uint64_t elapsed_ns, float opacity, float time_scale) {
     if (ripple == NULL || !isfinite(opacity) || !isfinite(time_scale) || time_scale <= 0) return false;
     // Detect stalls in real time before applying the requested playback speed.
     float ticks = unlock_clock_advance(&ripple->clock, elapsed_ns, ripple->high_frame_rate) * time_scale;
-    /* Four solver ticks per stock tick let the wave cross the display during
-     * unlock. Equal steps of at most half a tick avoid exciting high-frequency
-     * modes at non-integral refresh rates with the low fullscreen damping. */
+    /* Four solver ticks per stock tick let the fullscreen wave cross the display.
+     * Both modes use equal steps of at most half a tick to avoid exciting
+     * high-frequency modes at non-integral refresh rates. */
     ticks *= ripple->fullscreen ? 4.0f : 1.0f;
-    const int substeps = (int) ceilf(ticks / (ripple->fullscreen ? 0.5f : 1.0f));
+    const int substeps = (int) ceilf(ticks / 0.5f);
     for (int i = 0; i < substeps; ++i) {
         const float step = ticks / substeps;
         if (ripple->fullscreen) reflect_rim(ripple);
         lle_ripple_move_adaptive(ripple->velocity, ripple->heights,
                 1, 1, ripple->stride - 1, ripple->detail_rows - 1,
                 ripple->stride, ripple->detail_rows, false,
-                ripple->fullscreen ? 0.994f : 0.94f, 0.5f, step);
+                ripple->fullscreen ? 0.994f : 0.98f, 0.5f, step);
         if (ripple->fullscreen) damp_edges(ripple, step);
     }
-    for (int row = 0; row < ripple->rows; ++row) {
-        for (int col = 0; col < ripple->columns; ++col) {
-            const int src = (row + ripple->padding) * ripple->stride + col + ripple->padding;
-            const int dst = (row * ripple->columns + col) * 3;
-            ripple->gpu_heights[dst] = ripple->heights[src];
-            ripple->gpu_heights[dst + 1] = ripple->heights[src - 1];
-            ripple->gpu_heights[dst + 2] = ripple->heights[src + ripple->stride];
-        }
-    }
+    update_mesh(ripple);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glClearColor(0, 0, 0, 0);
     glClear(GL_COLOR_BUFFER_BIT);
     LleRippleOverlayOptions options;
     lle_ripple_overlay_default_options(&options);
+    options.water_surface = true;
     if (ripple->fullscreen) {
         // Keep the shoulders of the crest visible as the broader wave settles.
         options.mask_low = 0.02f;
@@ -237,7 +264,6 @@ bool unlock_ripple_draw(UnlockRipple *ripple, uint64_t elapsed_ns, float opacity
     if (ripple->unlock_effect) {
         options.mask_low = 0.012f;
         options.mask_high = 0.09f;
-        options.water_surface = true;
     }
     options.opacity = fminf(1, fmaxf(0, opacity));
     char error[512];

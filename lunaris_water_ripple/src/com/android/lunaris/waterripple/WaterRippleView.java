@@ -52,7 +52,8 @@ public final class WaterRippleView extends View {
     private static final String TAG = "LunarisWaterRipple";
     private static final long SETUP_TIMEOUT_MS = 250;
     private static final long SIMULATION_DURATION_MS = 800;
-    private static final int TEXTURE_LIMIT = 1024;
+    private static final int WATERCOLOR_TEXTURE_LIMIT = 1024;
+    private static final int WATER_TEXTURE_LIMIT = 2048;
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private final ViewTreeObserver.OnPreDrawListener mPreDraw = this::onPreDraw;
     private Session mSession;
@@ -258,9 +259,11 @@ public final class WaterRippleView extends View {
                 mSurface = mBufferQueue.createSurface();
                 mSurface.setFrameRate(mRequestedFrameRate, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
                         Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
+                final int textureLimit = mAnimation == EFFECT_WATER
+                        ? WATER_TEXTURE_LIMIT : WATERCOLOR_TEXTURE_LIMIT;
                 mCaptureArgs = new ScreenCaptureInternal.CaptureArgs.Builder<>()
                         .setSourceCrop(mCrop)
-                        .setFrameScale(Math.min(1f, TEXTURE_LIMIT / (float) Math.max(mWidth, mHeight)))
+                        .setFrameScale(Math.min(1f, textureLimit / (float) Math.max(mWidth, mHeight)))
                         .setPixelFormat(PixelFormat.RGBA_8888)
                         .setExcludeLayers(new SurfaceControl[] {mLayer})
                         .build();
