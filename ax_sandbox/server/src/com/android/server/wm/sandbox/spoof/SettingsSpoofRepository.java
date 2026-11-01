@@ -29,6 +29,8 @@ public class SettingsSpoofRepository {
 
     private final ContentResolver mContentResolver;
     private final Handler mBgHandler;
+    private final Object mLock = new Object();
+    private boolean mSavePending;
     private final Map<String, Set<String>> mSpoofSettingsMap = new ConcurrentHashMap<>();
 
     public SettingsSpoofRepository(Context context) {
@@ -71,23 +73,25 @@ public class SettingsSpoofRepository {
 
     public boolean setSpoofSettingEnabled(String packageName, String settingKey, boolean enabled, int userId) {
         if (TextUtils.isEmpty(packageName) || TextUtils.isEmpty(settingKey)) return false;
-        String key = toKey(packageName, userId);
-        boolean changed;
-        if (enabled) {
-            Set<String> settings = mSpoofSettingsMap.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
-            changed = settings.add(settingKey);
-        } else {
-            Set<String> settings = mSpoofSettingsMap.get(key);
-            if (settings == null) return false;
-            changed = settings.remove(settingKey);
-            if (settings.isEmpty()) {
-                mSpoofSettingsMap.remove(key);
+        synchronized (mLock) {
+            String key = toKey(packageName, userId);
+            boolean changed;
+            if (enabled) {
+                Set<String> settings = mSpoofSettingsMap.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
+                changed = settings.add(settingKey);
+            } else {
+                Set<String> settings = mSpoofSettingsMap.get(key);
+                if (settings == null) return false;
+                changed = settings.remove(settingKey);
+                if (settings.isEmpty()) {
+                    mSpoofSettingsMap.remove(key);
+                }
             }
+            if (changed) {
+                scheduleSave();
+            }
+            return changed;
         }
-        if (changed) {
-            scheduleSave();
-        }
-        return changed;
     }
 
     public List<String> getEnabledSpoofSettings(String packageName, int userId) {
@@ -98,48 +102,61 @@ public class SettingsSpoofRepository {
     }
 
     private void reload() {
-        JSONObject config = SandboxConfigStorage.readConfig(mContentResolver);
-        JSONObject mapObj = config.optJSONObject(KEY_SPOOF_SETTINGS_MAP);
-        if (mapObj == null) {
-            mSpoofSettingsMap.clear();
-            return;
-        }
-        Map<String, Set<String>> newMap = new HashMap<>();
-        Iterator<String> keys = mapObj.keys();
-        while (keys.hasNext()) {
-            String rawKey = keys.next();
-            String key = rawKey.contains(":") ? rawKey : rawKey + ":0";
-            JSONArray arr = mapObj.optJSONArray(rawKey);
-            if (arr != null && arr.length() > 0) {
-                Set<String> settings = ConcurrentHashMap.newKeySet();
-                for (int i = 0; i < arr.length(); i++) {
-                    String s = arr.optString(i);
-                    if (!TextUtils.isEmpty(s)) settings.add(s);
-                }
-                if (!settings.isEmpty()) {
-                    newMap.put(key, settings);
+        synchronized (mLock) {
+            if (mSavePending) {
+                return;
+            }
+            JSONObject config = SandboxConfigStorage.readConfig(mContentResolver);
+            JSONObject mapObj = config.optJSONObject(KEY_SPOOF_SETTINGS_MAP);
+            if (mapObj == null) {
+                mSpoofSettingsMap.clear();
+                return;
+            }
+            Map<String, Set<String>> newMap = new HashMap<>();
+            Iterator<String> keys = mapObj.keys();
+            while (keys.hasNext()) {
+                String rawKey = keys.next();
+                String key = rawKey.contains(":") ? rawKey : rawKey + ":0";
+                JSONArray arr = mapObj.optJSONArray(rawKey);
+                if (arr != null && arr.length() > 0) {
+                    Set<String> settings = ConcurrentHashMap.newKeySet();
+                    for (int i = 0; i < arr.length(); i++) {
+                        String s = arr.optString(i);
+                        if (!TextUtils.isEmpty(s)) settings.add(s);
+                    }
+                    if (!settings.isEmpty()) {
+                        newMap.put(key, settings);
+                    }
                 }
             }
+            mSpoofSettingsMap.keySet().removeIf(k -> !newMap.containsKey(k));
+            mSpoofSettingsMap.putAll(newMap);
         }
-        mSpoofSettingsMap.keySet().removeIf(k -> !newMap.containsKey(k));
-        mSpoofSettingsMap.putAll(newMap);
     }
 
     private void scheduleSave() {
+        if (mSavePending) {
+            return;
+        }
+        mSavePending = true;
         mBgHandler.post(() -> {
-            JSONObject mapObj = new JSONObject();
-            try {
-                for (Map.Entry<String, Set<String>> entry : mSpoofSettingsMap.entrySet()) {
-                    mapObj.put(entry.getKey(), new JSONArray(entry.getValue()));
-                }
-            } catch (JSONException ignored) {
-            }
-            SandboxConfigStorage.updateConfig(mContentResolver, config -> {
+            synchronized (mLock) {
                 try {
-                    config.put(KEY_SPOOF_SETTINGS_MAP, mapObj);
+                    JSONObject mapObj = new JSONObject();
+                    for (Map.Entry<String, Set<String>> entry : mSpoofSettingsMap.entrySet()) {
+                        mapObj.put(entry.getKey(), new JSONArray(entry.getValue()));
+                    }
+                    SandboxConfigStorage.updateConfig(mContentResolver, config -> {
+                        try {
+                            config.put(KEY_SPOOF_SETTINGS_MAP, mapObj);
+                        } catch (JSONException ignored) {
+                        }
+                    });
                 } catch (JSONException ignored) {
+                } finally {
+                    mSavePending = false;
                 }
-            });
+            }
         });
     }
 }
