@@ -18,6 +18,7 @@ package com.android.axion.blur
 
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.drawable.ColorDrawable
@@ -65,6 +66,10 @@ class AxBlurBackgroundRenderer @JvmOverloads constructor(
 
     fun setSourceView(source: View?) {
         blur.setSourceView(source)
+    }
+
+    fun setSourceToLocalTransform(transform: Matrix, width: Int, height: Int) {
+        blur.setSourceToLocalTransform(transform, width, height)
     }
 
     fun setExcludedSourceViews(vararg excludedViews: View?) {

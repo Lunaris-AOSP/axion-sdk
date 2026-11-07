@@ -27,7 +27,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,9 +45,12 @@ import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.setFrom
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.GlobalPositionAwareModifierNode
@@ -188,6 +193,9 @@ fun Modifier.axBlurBackground(
     }
     val tintArgb = tintColor.toArgb()
     val cornerRadii = remember { FloatArray(8) }
+    var sourceCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val sourceMatrix = remember { androidx.compose.ui.graphics.Matrix() }
+    val sourceAndroidMatrix = remember { android.graphics.Matrix() }
     val requestedCornerRadiusPx = if (cornerRadius.isSpecified) {
         with(density) { cornerRadius.toPx() }
     } else {
@@ -205,7 +213,9 @@ fun Modifier.axBlurBackground(
         blur.setEnabled(blurEnabled)
     }
 
-    return axBlurFrameTracking(blurEnabled).drawWithContent {
+    val trackedModifier = axBlurFrameTracking(blurEnabled)
+        .onGloballyPositioned { sourceCoordinates = it }
+    return trackedModifier.drawWithContent {
         val width = size.width.roundToInt()
         val height = size.height.roundToInt()
         val outline = shape?.createOutline(size, layoutDirection, this)
@@ -217,6 +227,12 @@ fun Modifier.axBlurBackground(
         val drewBlur = if (blurEnabled && width > 0 && height > 0) {
             var result = false
             blur.setOverlayColor(tintArgb)
+            sourceCoordinates?.takeIf { it.isAttached }?.let {
+                sourceMatrix.reset()
+                it.transformFrom(it.findRootCoordinates(), sourceMatrix)
+                sourceAndroidMatrix.setFrom(sourceMatrix)
+                blur.setSourceToLocalTransform(sourceAndroidMatrix, it.size.width, it.size.height)
+            }
             drawIntoCanvas { canvas ->
                 result = when (outline) {
                     is Outline.Rounded -> {

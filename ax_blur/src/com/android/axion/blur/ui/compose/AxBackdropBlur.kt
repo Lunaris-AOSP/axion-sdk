@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.setFrom
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -524,6 +525,8 @@ private class AxBackdropBlurNode(
     private var renderEffectRadius = -1f
     private var nativeBackdropBlur: AxViewBackdropBlur? = null
     private var nativeBackdropBlurView: View? = null
+    private val sourceMatrix = androidx.compose.ui.graphics.Matrix()
+    private val sourceAndroidMatrix = android.graphics.Matrix()
     private var settingsValues: AxBackdropBlurSettingsModel? = null
     private var settingsObserver: AxBackdropBlurSettingsSubscription? = null
     private var needsSourceInvalidation = false
@@ -718,6 +721,12 @@ private class AxBackdropBlurNode(
         cornerRadius: Float,
     ): Boolean {
         val blur = nativeBackdropBlurFor(currentValueOf(LocalView))
+        lastCoordinates?.takeIf { it.isAttached }?.let {
+            sourceMatrix.reset()
+            it.transformFrom(it.findRootCoordinates(), sourceMatrix)
+            sourceAndroidMatrix.setFrom(sourceMatrix)
+            blur.setSourceToLocalTransform(sourceAndroidMatrix, it.size.width, it.size.height)
+        }
         blur.setBlurRadiusPx(blurRadius)
         val boundsLeft = 0
         val boundsTop = 0

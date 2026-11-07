@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <item name="ax_window_blur_controller" type="id" />
+    <item name="ax_window_blur_source" type="id" />
 </resources>
