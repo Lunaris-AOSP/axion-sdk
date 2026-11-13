@@ -15,12 +15,16 @@
  */
 package com.android.axion.blur.model
 
+import android.provider.Settings
+import com.android.axion.kotlin.settings.SettingsType
+
 data class AxBackdropBlurSettingsSpec internal constructor(
     internal val enabledKey: String?,
     internal val radiusKey: String,
     internal val defaultEnabled: Boolean,
     internal val defaultRadiusPx: Float?,
     internal val maxRadiusPx: Float?,
+    internal val enabledSettingsType: SettingsType = SettingsType.SECURE,
 ) {
     companion object {
         private const val KEY_SYSTEM_BLUR_RADIUS = "system_blur_radius"
@@ -35,6 +39,16 @@ data class AxBackdropBlurSettingsSpec internal constructor(
             defaultRadiusPx = null,
             maxRadiusPx = null,
         )
+
+        private val DIALOG = SYSTEM.copy(
+            enabledKey = Settings.System.DIALOG_BLUR_ENABLED,
+            enabledSettingsType = SettingsType.SYSTEM,
+        )
+
+        @JvmStatic
+        fun dialog(): AxBackdropBlurSettingsSpec {
+            return DIALOG
+        }
 
         @JvmStatic
         fun system(): AxBackdropBlurSettingsSpec {

@@ -20,6 +20,7 @@ import android.R as AndroidR
 import android.app.Dialog
 import android.view.View
 import android.view.ViewGroup
+import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 
 object AxWindowBlurHooks {
     @JvmStatic
@@ -130,7 +131,12 @@ object AxWindowBlurHooks {
         val existing = decorView.getTag(R.id.ax_window_blur_controller)
             as? AxWindowBlurController
         if (existing != null) return existing
-        val controller = AxWindowBlurController(window, dialog.context, blurBehind)
+        val controller = AxWindowBlurController(
+            window,
+            dialog.context,
+            blurBehind,
+            settingsSpec = AxBackdropBlurSettingsSpec.dialog(),
+        )
         decorView.setTag(R.id.ax_window_blur_controller, controller)
         decorView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: View) {

@@ -29,6 +29,7 @@ import android.view.Window
 import android.view.WindowManager
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
 import com.android.axion.blur.model.AxBackdropBlurSettingsModel
+import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 import com.android.internal.graphics.drawable.BackgroundBlurDrawable
 import kotlin.math.roundToInt
 
@@ -38,9 +39,12 @@ class AxWindowBlurController @JvmOverloads constructor(
     private val blurBehind: Boolean = false,
     private val blurBehindRadiusScale: Float = DEFAULT_BLUR_BEHIND_RADIUS_SCALE,
     private val surfaceAlpha: Int = DEFAULT_SURFACE_ALPHA,
+    settingsSpec: AxBackdropBlurSettingsSpec = AxBackdropBlurSettingsSpec.system(),
 ) {
     private val context = context ?: window.context
-    private val blurInteractor = AxBackdropBlurInteractor(this.context)
+    private val blurInteractor = AxBackdropBlurInteractor(
+        this.context, settingsSpec,
+    )
     private val settingsObserver = blurInteractor.createSubscription {
         apply()
     }
@@ -336,6 +340,7 @@ class AxWindowBlurController @JvmOverloads constructor(
                 blurBehind,
                 blurBehindRadiusScale,
                 surfaceAlpha,
+                AxBackdropBlurSettingsSpec.dialog(),
             )
             val decorView = window.decorView
             decorView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {

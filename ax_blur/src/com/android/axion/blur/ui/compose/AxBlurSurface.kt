@@ -129,11 +129,13 @@ fun rememberAxBlurEnabled(
     val settingEnabled = if (enabledKey == null) {
         true
     } else {
-        val secureSettings = remember(resolver) { SettingsFlow(resolver, SettingsType.SECURE) }
-        val value by remember(secureSettings, enabledKey, settingsSpec.defaultEnabled) {
-            secureSettings.observeBoolean(enabledKey, settingsSpec.defaultEnabled)
+        val enabledSettings = remember(resolver, settingsSpec.enabledSettingsType) {
+            SettingsFlow(resolver, settingsSpec.enabledSettingsType)
+        }
+        val value by remember(enabledSettings, enabledKey, settingsSpec.defaultEnabled) {
+            enabledSettings.observeBoolean(enabledKey, settingsSpec.defaultEnabled)
         }.collectAsState(
-            initial = secureSettings.getInt(
+            initial = enabledSettings.getInt(
                 enabledKey,
                 if (settingsSpec.defaultEnabled) 1 else 0,
             ) != 0,

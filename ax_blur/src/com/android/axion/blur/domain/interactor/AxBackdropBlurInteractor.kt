@@ -34,7 +34,7 @@ internal class AxBackdropBlurInteractor(
     fun settings(): AxBackdropBlurSettingsModel {
         val maxRadius = spec.maxRadiusPx ?: maxBlurRadiusPx(appContext)
         val defaultRadius = spec.defaultRadiusPx ?: maxRadius
-        val enabled = repository.globalBlurEnabled() && settingEnabled()
+        val enabled = repository.globalBlurEnabled() && repository.settingEnabled(spec)
         if (!enabled) {
             return AxBackdropBlurSettingsModel(
                 enabled = false,
@@ -52,11 +52,6 @@ internal class AxBackdropBlurInteractor(
         onSettingsChanged: () -> Unit,
     ): AxBackdropBlurSettingsSubscription {
         return repository.createSubscription(spec, onSettingsChanged)
-    }
-
-    private fun settingEnabled(): Boolean {
-        val enabledKey = spec.enabledKey ?: return true
-        return repository.secureInt(enabledKey, if (spec.defaultEnabled) 1 else 0) != 0
     }
 
     private fun Float.sanitize(maxRadius: Float): Float {

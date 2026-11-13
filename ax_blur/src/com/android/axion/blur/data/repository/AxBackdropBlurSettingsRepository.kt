@@ -48,6 +48,13 @@ internal class AxBackdropBlurSettingsRepository(
         handler,
     )
 
+    private val systemSettings = SettingsFlow(
+        resolver,
+        SettingsType.SYSTEM,
+        currentUserId(),
+        handler,
+    )
+
     fun globalBlurEnabled(): Boolean {
         return globalSettings.getInt(
             Settings.Global.DISABLE_WINDOW_BLURS,
@@ -55,8 +62,17 @@ internal class AxBackdropBlurSettingsRepository(
         ) == 0
     }
 
-    fun secureInt(key: String, default: Int): Int {
-        return secureSettings.getInt(key, default)
+    fun settingEnabled(spec: AxBackdropBlurSettingsSpec): Boolean {
+        val key = spec.enabledKey ?: return true
+        return enabledSettings(spec).getInt(key, if (spec.defaultEnabled) 1 else 0) != 0
+    }
+
+    private fun enabledSettings(spec: AxBackdropBlurSettingsSpec): SettingsFlow {
+        return when (spec.enabledSettingsType) {
+            SettingsType.SYSTEM -> systemSettings
+            SettingsType.SECURE -> secureSettings
+            SettingsType.GLOBAL -> globalSettings
+        }
     }
 
     fun secureFloat(key: String, default: Float): Float {
@@ -77,7 +93,7 @@ internal class AxBackdropBlurSettingsRepository(
     private fun flows(spec: AxBackdropBlurSettingsSpec): List<Flow<Unit>> {
         return buildList {
             add(globalSettings.observe(Settings.Global.DISABLE_WINDOW_BLURS, emitInitial = false))
-            spec.enabledKey?.let { add(secureSettings.observe(it, emitInitial = false)) }
+            spec.enabledKey?.let { add(enabledSettings(spec).observe(it, emitInitial = false)) }
             add(secureSettings.observe(spec.radiusKey, emitInitial = false))
         }
     }
