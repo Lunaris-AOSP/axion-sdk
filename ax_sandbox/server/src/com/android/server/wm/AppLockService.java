@@ -16,13 +16,13 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.LauncherActivityInfo;
 import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.os.Binder;
 import android.os.Process;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.UserHandle;
+import android.os.UserManager;
 import android.text.TextUtils;
 
 import com.android.internal.app.IAppLockStateListener;
@@ -84,9 +84,7 @@ public class AppLockService {
     private final Map<String, Runnable> mTimeoutRunnables = new ConcurrentHashMap<>();
 
     private Intent mConfirmIntent;
-    private ResolveInfo mSandboxResolveInfo;
     private int mRequestCode;
-    private int mCurrentUserId = 0;
     private boolean mKeyguardDone = true;
     private String mLastFocusedAppKey = null;
     private int mLastFocusedTaskId = INVALID_TASK_ID;
@@ -139,7 +137,6 @@ public class AppLockService {
         if (r == null || !hasLockedPackages() || r.isNoDisplay() || r.isActivityTypeHomeOrRecents()) {
             return false;
         }
-        ensureResolveInfo(r.mUserId);
         return isAppLocked(r.packageName, r.getUid(), r.mActivityComponent);
     }
 
@@ -255,7 +252,6 @@ public class AppLockService {
         intent.putExtra(EXTRA_LOCKED_PACKAGE, packageName);
         intent.putExtra(EXTRA_LOCKED_UID, userId);
         intent.putExtra(EXTRA_USER_ID, userId);
-        intent.putExtra("app_label", resolveAppLabel(packageName, userId));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
 
         long identity = Binder.clearCallingIdentity();
@@ -263,7 +259,6 @@ public class AppLockService {
             mAtms.getActivityStartController()
                     .obtainStarter(intent, "promptUnlock->AxSandbox")
                     .setCallingUid(0)
-                    .setActivityInfo(mSandboxResolveInfo != null ? mSandboxResolveInfo.activityInfo : null)
                     .execute();
         } finally {
             Binder.restoreCallingIdentity(identity);
@@ -283,7 +278,12 @@ public class AppLockService {
         if (next == null || next.finishing || !next.canBeTopRunning() || !hasLockedPackages()) {
             return false;
         }
-        clearUnlockedApp(next);
+        // Only ON_LEAVE drops the other sessions when an app is opened. Doing this for every
+        // behaviour made TIMEOUT / ON_SCREEN_OFF / ON_KILL behave like ON_LEAVE, and refreshing
+        // the timestamps here also defeated the timeout.
+        if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_LEAVE) {
+            clearUnlockedApp(next);
+        }
         if (!isAppLocked(next)) return false;
         if (!startAuthPrompt(next, "lockApp->AxSandbox")) {
             return false;
@@ -402,14 +402,12 @@ public class AppLockService {
             intent.putExtra(EXTRA_LOCKED_COMPONENT,
                     target.intent.getComponent() != null
                             ? target.intent.getComponent().flattenToString() : "");
-            intent.putExtra("app_label", resolveAppLabel(target.packageName, target.mUserId));
 
             mAtms.getActivityStartController()
                     .obtainStarter(intent, reason)
                     .setCallingUid(0)
                     .setResultTo(target.token)
                     .setRequestCode(mRequestCode)
-                    .setActivityInfo(mSandboxResolveInfo != null ? mSandboxResolveInfo.activityInfo : null)
                     .execute();
 
             hideBlockedTarget(target);
@@ -528,9 +526,13 @@ public class AppLockService {
         }
         lockAllSessionsExcept(keep);
 
-        final long now = SystemClock.elapsedRealtime();
-        for (String k : keep) {
-            mUnlockTimestamps.put(k, now);
+        // Refreshing the timestamps on every resume made the timeout look permanently fresh.
+        // Only touch them for behaviours that do not measure idle time.
+        if (mRepository.getLockBehavior() != LOCK_BEHAVIOR_TIMEOUT) {
+            final long now = SystemClock.elapsedRealtime();
+            for (String k : keep) {
+                mUnlockTimestamps.put(k, now);
+            }
         }
 
         if (WindowConfiguration.isFloating(r.getWindowingMode())) {
@@ -571,8 +573,18 @@ public class AppLockService {
     }
 
     public void cleanupPackage(String packageName) {
-        cleanupPackage(packageName, 0);
-        cleanupPackage(packageName, 999);
+        if (mContext == null) {
+            cleanupPackage(packageName, UserHandle.USER_SYSTEM);
+            return;
+        }
+        UserManager userManager = mContext.getSystemService(UserManager.class);
+        if (userManager == null) {
+            cleanupPackage(packageName, UserHandle.USER_SYSTEM);
+            return;
+        }
+        for (UserHandle user : userManager.getUserProfiles()) {
+            cleanupPackage(packageName, user.getIdentifier());
+        }
     }
 
     public boolean isSandboxActivity(ComponentName componentName) {
@@ -874,23 +886,13 @@ public class AppLockService {
         });
     }
 
-    private void ensureResolveInfo(int userId) {
-        if (mSandboxResolveInfo == null || mCurrentUserId != userId) {
-            try {
-                List<ResolveInfo> list = mContext.getPackageManager()
-                        .queryIntentActivitiesAsUser(getConfirmIntent(), PackageManager.MATCH_SYSTEM_ONLY, userId);
-                if (list != null) {
-                    for (ResolveInfo ri : list) {
-                        if (ri.activityInfo != null && (ri.activityInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
-                            mSandboxResolveInfo = ri;
-                            mCurrentUserId = userId;
-                            break;
-                        }
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-        }
+    /**
+     * Resolves the credential activity once, while the system is booting, instead of lazily on
+     * the first app launch (which used to run a PackageManager query under the window manager
+     * lock).
+     */
+    public void init() {
+        getConfirmIntent();
     }
 
     private Intent getConfirmIntent() {
@@ -920,16 +922,6 @@ public class AppLockService {
             return (pm != null) ? sandboxIntent : appLockerIntent;
         }
         return mConfirmIntent;
-    }
-
-    private String resolveAppLabel(String packageName, int userId) {
-        try {
-            PackageManager pm = mContext.getPackageManager();
-            ApplicationInfo ai = pm.getApplicationInfoAsUser(packageName, 0, userId);
-            return pm.getApplicationLabel(ai).toString();
-        } catch (Exception e) {
-            return packageName;
-        }
     }
 
     private int getPackageUid(String packageName) {

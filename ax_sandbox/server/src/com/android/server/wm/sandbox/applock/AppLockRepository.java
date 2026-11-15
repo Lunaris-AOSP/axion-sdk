@@ -145,7 +145,11 @@ public class AppLockRepository {
         return changed;
     }
 
-    private void reload() {
+    /**
+     * Re-reads the persisted configuration. Called on boot and on user switch, because the
+     * behaviour/timeout settings are read for the current user.
+     */
+    public void reload() {
         mLockBehavior = Settings.Secure.getIntForUser(mContentResolver,
                 SETTING_LOCK_BEHAVIOR, LOCK_BEHAVIOR_ON_LEAVE, UserHandle.USER_CURRENT);
         mLockTimeout = Settings.Secure.getIntForUser(mContentResolver,
