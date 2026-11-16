@@ -364,6 +364,9 @@ public class AppLockService {
         String pendingKey = sessionKey(target);
 
         if (isSessionUnlocked(target.packageName, target.mUserId)) {
+            if (mRepository.isAppLocked(target.packageName, target.mUserId)) {
+                Slog.d(TAG, "prompt skipped, session already unlocked: " + pendingKey);
+            }
             return true;
         }
 
@@ -408,6 +411,8 @@ public class AppLockService {
                     .setRequestCode(mRequestCode)
                     .execute();
 
+            Slog.d(TAG, "prompting " + pendingKey + " reason=" + reason
+                    + " display=" + target.getDisplayId() + " visible=" + target.isVisible());
             hideBlockedTarget(target);
             resumePromptAfterStart(target);
             return true;
