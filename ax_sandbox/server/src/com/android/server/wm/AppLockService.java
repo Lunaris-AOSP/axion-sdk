@@ -25,6 +25,7 @@ import android.os.UserHandle;
 import android.os.UserManager;
 import android.text.TextUtils;
 import android.util.Slog;
+import android.view.Display;
 
 import com.android.internal.app.IAppLockStateListener;
 import com.android.internal.app.IAppSessionListener;
@@ -409,6 +410,7 @@ public class AppLockService {
                     .execute();
 
             hideBlockedTarget(target);
+            resumePromptAfterStart(target);
             return true;
         } catch (Exception e) {
             lockSession(target.packageName, target.mUserId);
@@ -417,6 +419,35 @@ public class AppLockService {
             }
             return true;
         }
+    }
+
+    /**
+     * Makes sure the prompt actually gets resumed when it was started for an app that is not on
+     * the default display (freeform window on a virtual display, e.g. LMOFreeform).
+     *
+     * <p>The prompt is started from inside the resume pass of the target activity, so it cannot be
+     * resumed by that same pass (Task#resumeTopActivityUncheckedLocked guards against recursion)
+     * and we abort that pass right after. The default display always gets another pass; a task
+     * living on a freeform/virtual display does not, so the prompt stayed un-resumed, its process
+     * stayed frozen and the freeform window sat there black until the user expanded the app and
+     * its task was moved to the default display.
+     */
+    private void resumePromptAfterStart(ActivityRecord target) {
+        if (target.getDisplayId() == Display.DEFAULT_DISPLAY) {
+            return;
+        }
+        final Task rootTask = target.getRootTask();
+        if (rootTask == null) {
+            return;
+        }
+        mAtms.mH.post(() -> {
+            synchronized (mAtms.mGlobalLock) {
+                if (rootTask.isAttached()) {
+                    mAtms.mRootWindowContainer.resumeFocusedTasksTopActivities(
+                            rootTask, null /* target */);
+                }
+            }
+        });
     }
 
     public void onAppFocusChanged(ActivityRecord newFocus, Task newTask) {
@@ -497,6 +528,17 @@ public class AppLockService {
         Task task = target.getTask();
         if (task == null) {
             target.finishIfPossible(reason, false);
+            return;
+        }
+        if (task.getDisplayId() != Display.DEFAULT_DISPLAY) {
+            // A floating window on a secondary display has no home task behind it, and its owner
+            // (e.g. LMOFreeform) only tears the window down once the task is gone. Closing the app
+            // is what the user expects instead of leaving an empty black window behind.
+            task.forAllActivities(ar -> {
+                if (!ar.finishing) {
+                    ar.finishIfPossible(reason, false);
+                }
+            });
             return;
         }
         TaskDisplayArea displayArea = task.getDisplayArea();
