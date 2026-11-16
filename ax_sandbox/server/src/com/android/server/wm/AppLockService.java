@@ -289,14 +289,10 @@ public class AppLockService {
             clearUnlockedApp(next);
         }
         if (!isAppLocked(next)) return false;
-        if (!startAuthPrompt(next, "lockApp->AxSandbox")) {
-            return false;
-        }
-        if (prev != null && prev.finishing) {
-            prev.setVisibility(false);
-        }
-        hideBlockedTarget(next);
-        return true;
+        // startAuthPrompt() hides the target only when it is already on screen. A target that is
+        // just being launched has nothing to hide, and forcing it invisible here made the pending
+        // transition wait for a window that would never draw.
+        return startAuthPrompt(next, "lockApp->AxSandbox");
     }
 
     public boolean checkUnlockApp(ActivityRecord r, int resultCode, Intent data) {
@@ -903,13 +899,22 @@ public class AppLockService {
         target.finishIfPossible("applock-duplicate-pending", false);
     }
 
+    /**
+     * Hides a locked target that is already on screen so its content is not exposed while the
+     * auth prompt comes up.
+     *
+     * <p>Only targets that are actually visible need this. Calling
+     * {@link ActivityRecord#setVisibility(boolean)} on an activity that is still waiting for its
+     * first frame puts it into the pending transition as an occluded participant, and since it
+     * will never draw, the transition blocks until the sync timeout (2s for a change transition).
+     * That is what froze the screen for 2-3s when switching between two locked apps: the launch
+     * animation was held back instead of playing into the prompt.
+     */
     private void hideBlockedTarget(ActivityRecord target) {
-        if (target == null) {
+        if (target == null || target.finishing || !target.isVisible()) {
             return;
         }
-        if (!target.finishing) {
-            target.setVisibility(false);
-        }
+        target.setVisibility(false);
         abortAnimation(target);
     }
 
