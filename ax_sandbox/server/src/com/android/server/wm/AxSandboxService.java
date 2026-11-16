@@ -209,6 +209,18 @@ public final class AxSandboxService extends SystemService {
         mAppLockService.lockTopApp(task, reason);
     }
 
+    public void onStartActivityFromRecents(Task task) {
+        mAppLockService.onStartActivityFromRecents(task);
+    }
+
+    public void onRecentsTransition(ActivityRecord focusedApp) {
+        mAppLockService.onRecentsTransition(focusedApp);
+    }
+
+    public void onActivityPaused(ActivityRecord r) {
+        mAppLockService.onActivityPaused(r);
+    }
+
     public void onAppFocusChanged(ActivityRecord newFocus, Task newTask) {
         mAppLockService.onAppFocusChanged(newFocus, newTask);
     }

@@ -24,6 +24,7 @@ import android.os.SystemClock;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.text.TextUtils;
+import android.util.Slog;
 
 import com.android.internal.app.IAppLockStateListener;
 import com.android.internal.app.IAppSessionListener;
@@ -39,6 +40,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class AppLockService {
+
+    private static final String TAG = "AppLockService";
     public static final String SANDBOX_PACKAGE = "com.android.axion.sandbox";
     public static final String APPLOCKER_PACKAGE = "com.android.applocker";
     private static final String APPLOCKER_ACTIVITY = "com.android.applocker.AuthenticateActivity";
@@ -108,6 +111,7 @@ public class AppLockService {
 
     public void setKeyguardDone(boolean done) {
         mKeyguardDone = done;
+        Slog.d(TAG, "setKeyguardDone done=" + done + " behavior=" + mRepository.getLockBehavior());
         if (!done && mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_SCREEN_OFF) {
             clearUnlockedApp();
         }
@@ -310,9 +314,7 @@ public class AppLockService {
                 return true;
             }
             lockSession(packageName, userId);
-            if (!target.finishing) {
-                target.finishIfPossible("applock-canceled", false);
-            }
+            dismissLockedTarget(target, "applock-canceled");
             return true;
         }
         try {
@@ -321,7 +323,7 @@ public class AppLockService {
                 markSessionUnlocked(packageName, userId);
             } else if (r.resultTo != null) {
                 lockSession(packageName, userId);
-                r.resultTo.finishIfPossible("applock-canceled", false);
+                dismissLockedTarget(r.resultTo, "applock-canceled");
             } else {
                 lockSession(packageName, userId);
             }
@@ -487,6 +489,76 @@ public class AppLockService {
     public void onAppDied(String packageName, int userId) {
         if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_KILL) {
             markSessionLocked(packageName, userId);
+        }
+    }
+
+    /**
+     * Dismisses a locked task without killing it: the task goes to the back and home comes
+     * forward, so the process is kept alive and reopening the app is immediate.
+     */
+    private void dismissLockedTarget(ActivityRecord target, String reason) {
+        if (target == null || target.finishing) return;
+        Task task = target.getTask();
+        if (task == null) {
+            target.finishIfPossible(reason, false);
+            return;
+        }
+        TaskDisplayArea displayArea = task.getDisplayArea();
+        task.moveToBack(reason, null);
+        if (displayArea != null) {
+            displayArea.moveHomeRootTaskToFront(reason);
+        }
+    }
+
+    /**
+     * Called when a task is started from recents. Only ON_LEAVE drops the other sessions;
+     * doing it unconditionally made every behaviour relock like ON_LEAVE.
+     */
+    public void onStartActivityFromRecents(Task task) {
+        if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_LEAVE) {
+            clearUnlockedApp();
+        }
+        lockTopApp(task, "startActivityFromRecents");
+    }
+
+    /**
+     * Called when an activity pauses. This is the reliable "left the app" signal: it fires for
+     * the home button, gesture navigation, back and task switches alike, whereas the resume
+     * path is skipped for some of them.
+     */
+    public void onActivityPaused(ActivityRecord r) {
+        if (r == null || !hasLockedPackages()) return;
+        if (mRepository.getLockBehavior() != LOCK_BEHAVIOR_ON_LEAVE) return;
+        if (!mRepository.isAppLocked(r.packageName, r.mUserId)) return;
+        final String packageName = r.packageName;
+        final int userId = r.mUserId;
+        // Re-evaluate once the next activity has resumed; at pause time the top may still be
+        // the pausing activity.
+        mAtms.mH.post(() -> {
+            synchronized (mAtms.mGlobalLock) {
+                ActivityRecord top = mAtms.mRootWindowContainer.getTopResumedActivity();
+                // Our own credential screen is on top: keep the session unlocked.
+                if (top != null && top.intent != null
+                        && isAuthActivity(top.intent.getComponent())) {
+                    return;
+                }
+                // The app is still in the foreground (in-app navigation).
+                if (top != null && top.mUserId == userId
+                        && TextUtils.equals(top.packageName, packageName)) {
+                    return;
+                }
+                markSessionLocked(packageName, userId);
+            }
+        });
+    }
+
+    /**
+     * Called when a transition involving recents finishes. The session reset is ON_LEAVE only;
+     * running it unconditionally made ON_SCREEN_OFF / TIMEOUT / ON_KILL relock like ON_LEAVE.
+     */
+    public void onRecentsTransition(ActivityRecord focusedApp) {
+        if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_LEAVE) {
+            clearUnlockedApp(focusedApp);
         }
     }
 
