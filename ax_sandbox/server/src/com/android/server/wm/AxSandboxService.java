@@ -225,10 +225,6 @@ public final class AxSandboxService extends SystemService {
         mAppLockService.onAppFocusChanged(newFocus, newTask);
     }
 
-    public void onWindowingModeChanged(Task task, int prevWindowingMode) {
-        mAppLockService.onWindowingModeChanged(task, prevWindowingMode);
-    }
-
     public void onAppDied(String packageName, int userId) {
         mAppLockService.onAppDied(packageName, userId);
     }

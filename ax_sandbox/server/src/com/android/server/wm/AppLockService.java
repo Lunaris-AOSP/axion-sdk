@@ -8,7 +8,6 @@ import static android.app.AxSandboxManager.AppLockState.UNLOCKED;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AxSandboxManager.AppLockState;
-import android.app.WindowConfiguration;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -496,23 +495,6 @@ public class AppLockService {
                 && !hasAppLock(newFocus.packageName, newFocus.mUserId);
     }
 
-    public void onWindowingModeChanged(Task task, int prevMode) {
-        if (task == null || !hasLockedPackages()) return;
-        if (mRepository.getLockBehavior() != LOCK_BEHAVIOR_ON_LEAVE) return;
-
-        int currMode = task.getWindowingMode();
-        if (!WindowConfiguration.isFloating(prevMode) && WindowConfiguration.isFloating(currMode) && task.isVisible()) {
-            ActivityRecord r = task.topRunningActivityLocked();
-            if (isAppLocked(r)) {
-                markSessionUnlocked(r.packageName, r.mUserId);
-            }
-            return;
-        }
-        if (!mUnlockedApps.isEmpty()) {
-            lockVisibleMultiWindowApps(task.getDisplayContent());
-        }
-    }
-
     public void onAppDied(String packageName, int userId) {
         if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_KILL) {
             markSessionLocked(packageName, userId);
@@ -643,10 +625,6 @@ public class AppLockService {
             for (String k : keep) {
                 mUnlockTimestamps.put(k, now);
             }
-        }
-
-        if (WindowConfiguration.isFloating(r.getWindowingMode())) {
-            lockVisibleFullscreenApps(mAtms.mWindowManager.getDefaultDisplayContentLocked());
         }
     }
 
@@ -969,40 +947,6 @@ public class AppLockService {
         } catch (Exception ignored) {
         }
         r.abortAndClearOptionsAnimation();
-    }
-
-    private void lockVisibleMultiWindowApps(DisplayContent dc) {
-        if (dc == null) {
-            dc = mAtms.mWindowManager.getDefaultDisplayContentLocked();
-        }
-        if (dc == null) return;
-        dc.getDefaultTaskDisplayArea().forAllTasks(task -> {
-            if (task.isLeafTask()
-                    && (WindowConfiguration.inMultiWindowMode(task.getWindowingMode())
-                            || WindowConfiguration.isFloating(task.getWindowingMode()))
-                    && task.isVisible()) {
-                ActivityRecord r = task.topRunningActivityLocked();
-                if (isAppLocked(r)) {
-                    markSessionUnlocked(r.packageName, r.mUserId);
-                }
-            }
-        });
-    }
-
-    private void lockVisibleFullscreenApps(DisplayContent dc) {
-        if (dc == null) {
-            dc = mAtms.mWindowManager.getDefaultDisplayContentLocked();
-        }
-        if (dc == null) return;
-        dc.getDefaultTaskDisplayArea().forAllTasks(task -> {
-            if (task.isLeafTask() && task.getWindowingMode() == WindowConfiguration.WINDOWING_MODE_FULLSCREEN
-                    && task.isVisible()) {
-                ActivityRecord r = task.topRunningActivityLocked();
-                if (isAppLocked(r)) {
-                    markSessionUnlocked(r.packageName, r.mUserId);
-                }
-            }
-        });
     }
 
     /**
