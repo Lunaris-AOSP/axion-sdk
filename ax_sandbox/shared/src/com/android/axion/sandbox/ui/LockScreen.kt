@@ -67,7 +67,7 @@ fun LockScreen(
     isSetup: Boolean = false,
     promptText: String? = null,
     onUnlock: () -> Unit,
-    onPinEntered: (String) -> Boolean,
+    onPinEntered: suspend (String) -> Boolean,
     confirmPin: String? = null,
     onBack: (() -> Unit)? = null,
     biometricType: BiometricType = NONE,

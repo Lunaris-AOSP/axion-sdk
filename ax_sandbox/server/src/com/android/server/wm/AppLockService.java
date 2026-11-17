@@ -8,7 +8,6 @@ import static android.app.AxSandboxManager.AppLockState.UNLOCKED;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AxSandboxManager.AppLockState;
-import android.app.WindowConfiguration;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -16,14 +15,16 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.LauncherActivityInfo;
 import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.os.Binder;
 import android.os.Process;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.UserHandle;
+import android.os.UserManager;
 import android.text.TextUtils;
+import android.util.Slog;
+import android.view.Display;
 
 import com.android.internal.app.IAppLockStateListener;
 import com.android.internal.app.IAppSessionListener;
@@ -39,6 +40,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class AppLockService {
+
+    private static final String TAG = "AppLockService";
     public static final String SANDBOX_PACKAGE = "com.android.axion.sandbox";
     public static final String APPLOCKER_PACKAGE = "com.android.applocker";
     private static final String APPLOCKER_ACTIVITY = "com.android.applocker.AuthenticateActivity";
@@ -84,9 +87,7 @@ public class AppLockService {
     private final Map<String, Runnable> mTimeoutRunnables = new ConcurrentHashMap<>();
 
     private Intent mConfirmIntent;
-    private ResolveInfo mSandboxResolveInfo;
     private int mRequestCode;
-    private int mCurrentUserId = 0;
     private boolean mKeyguardDone = true;
     private String mLastFocusedAppKey = null;
     private int mLastFocusedTaskId = INVALID_TASK_ID;
@@ -110,6 +111,7 @@ public class AppLockService {
 
     public void setKeyguardDone(boolean done) {
         mKeyguardDone = done;
+        Slog.d(TAG, "setKeyguardDone done=" + done + " behavior=" + mRepository.getLockBehavior());
         if (!done && mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_SCREEN_OFF) {
             clearUnlockedApp();
         }
@@ -139,7 +141,6 @@ public class AppLockService {
         if (r == null || !hasLockedPackages() || r.isNoDisplay() || r.isActivityTypeHomeOrRecents()) {
             return false;
         }
-        ensureResolveInfo(r.mUserId);
         return isAppLocked(r.packageName, r.getUid(), r.mActivityComponent);
     }
 
@@ -255,7 +256,6 @@ public class AppLockService {
         intent.putExtra(EXTRA_LOCKED_PACKAGE, packageName);
         intent.putExtra(EXTRA_LOCKED_UID, userId);
         intent.putExtra(EXTRA_USER_ID, userId);
-        intent.putExtra("app_label", resolveAppLabel(packageName, userId));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
 
         long identity = Binder.clearCallingIdentity();
@@ -263,7 +263,6 @@ public class AppLockService {
             mAtms.getActivityStartController()
                     .obtainStarter(intent, "promptUnlock->AxSandbox")
                     .setCallingUid(0)
-                    .setActivityInfo(mSandboxResolveInfo != null ? mSandboxResolveInfo.activityInfo : null)
                     .execute();
         } finally {
             Binder.restoreCallingIdentity(identity);
@@ -283,16 +282,17 @@ public class AppLockService {
         if (next == null || next.finishing || !next.canBeTopRunning() || !hasLockedPackages()) {
             return false;
         }
-        clearUnlockedApp(next);
+        // Only ON_LEAVE drops the other sessions when an app is opened. Doing this for every
+        // behaviour made TIMEOUT / ON_SCREEN_OFF / ON_KILL behave like ON_LEAVE, and refreshing
+        // the timestamps here also defeated the timeout.
+        if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_LEAVE) {
+            clearUnlockedApp(next);
+        }
         if (!isAppLocked(next)) return false;
-        if (!startAuthPrompt(next, "lockApp->AxSandbox")) {
-            return false;
-        }
-        if (prev != null && prev.finishing) {
-            prev.setVisibility(false);
-        }
-        hideBlockedTarget(next);
-        return true;
+        // startAuthPrompt() hides the target only when it is already on screen. A target that is
+        // just being launched has nothing to hide, and forcing it invisible here made the pending
+        // transition wait for a window that would never draw.
+        return startAuthPrompt(next, "lockApp->AxSandbox");
     }
 
     public boolean checkUnlockApp(ActivityRecord r, int resultCode, Intent data) {
@@ -310,9 +310,7 @@ public class AppLockService {
                 return true;
             }
             lockSession(packageName, userId);
-            if (!target.finishing) {
-                target.finishIfPossible("applock-canceled", false);
-            }
+            dismissLockedTarget(target, "applock-canceled");
             return true;
         }
         try {
@@ -321,7 +319,7 @@ public class AppLockService {
                 markSessionUnlocked(packageName, userId);
             } else if (r.resultTo != null) {
                 lockSession(packageName, userId);
-                r.resultTo.finishIfPossible("applock-canceled", false);
+                dismissLockedTarget(r.resultTo, "applock-canceled");
             } else {
                 lockSession(packageName, userId);
             }
@@ -366,6 +364,9 @@ public class AppLockService {
         String pendingKey = sessionKey(target);
 
         if (isSessionUnlocked(target.packageName, target.mUserId)) {
+            if (mRepository.isAppLocked(target.packageName, target.mUserId)) {
+                Slog.d(TAG, "prompt skipped, session already unlocked: " + pendingKey);
+            }
             return true;
         }
 
@@ -402,17 +403,18 @@ public class AppLockService {
             intent.putExtra(EXTRA_LOCKED_COMPONENT,
                     target.intent.getComponent() != null
                             ? target.intent.getComponent().flattenToString() : "");
-            intent.putExtra("app_label", resolveAppLabel(target.packageName, target.mUserId));
 
             mAtms.getActivityStartController()
                     .obtainStarter(intent, reason)
                     .setCallingUid(0)
                     .setResultTo(target.token)
                     .setRequestCode(mRequestCode)
-                    .setActivityInfo(mSandboxResolveInfo != null ? mSandboxResolveInfo.activityInfo : null)
                     .execute();
 
+            Slog.d(TAG, "prompting " + pendingKey + " reason=" + reason
+                    + " display=" + target.getDisplayId() + " visible=" + target.isVisible());
             hideBlockedTarget(target);
+            resumePromptAfterStart(target);
             return true;
         } catch (Exception e) {
             lockSession(target.packageName, target.mUserId);
@@ -421,6 +423,35 @@ public class AppLockService {
             }
             return true;
         }
+    }
+
+    /**
+     * Makes sure the prompt actually gets resumed when it was started for an app that is not on
+     * the default display (freeform window on a virtual display, e.g. LMOFreeform).
+     *
+     * <p>The prompt is started from inside the resume pass of the target activity, so it cannot be
+     * resumed by that same pass (Task#resumeTopActivityUncheckedLocked guards against recursion)
+     * and we abort that pass right after. The default display always gets another pass; a task
+     * living on a freeform/virtual display does not, so the prompt stayed un-resumed, its process
+     * stayed frozen and the freeform window sat there black until the user expanded the app and
+     * its task was moved to the default display.
+     */
+    private void resumePromptAfterStart(ActivityRecord target) {
+        if (target.getDisplayId() == Display.DEFAULT_DISPLAY) {
+            return;
+        }
+        final Task rootTask = target.getRootTask();
+        if (rootTask == null) {
+            return;
+        }
+        mAtms.mH.post(() -> {
+            synchronized (mAtms.mGlobalLock) {
+                if (rootTask.isAttached()) {
+                    mAtms.mRootWindowContainer.resumeFocusedTasksTopActivities(
+                            rootTask, null /* target */);
+                }
+            }
+        });
     }
 
     public void onAppFocusChanged(ActivityRecord newFocus, Task newTask) {
@@ -469,26 +500,90 @@ public class AppLockService {
                 && !hasAppLock(newFocus.packageName, newFocus.mUserId);
     }
 
-    public void onWindowingModeChanged(Task task, int prevMode) {
-        if (task == null || !hasLockedPackages()) return;
-        if (mRepository.getLockBehavior() != LOCK_BEHAVIOR_ON_LEAVE) return;
-
-        int currMode = task.getWindowingMode();
-        if (!WindowConfiguration.isFloating(prevMode) && WindowConfiguration.isFloating(currMode) && task.isVisible()) {
-            ActivityRecord r = task.topRunningActivityLocked();
-            if (isAppLocked(r)) {
-                markSessionUnlocked(r.packageName, r.mUserId);
-            }
-            return;
-        }
-        if (!mUnlockedApps.isEmpty()) {
-            lockVisibleMultiWindowApps(task.getDisplayContent());
-        }
-    }
-
     public void onAppDied(String packageName, int userId) {
         if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_KILL) {
             markSessionLocked(packageName, userId);
+        }
+    }
+
+    /**
+     * Dismisses a locked task without killing it: the task goes to the back and home comes
+     * forward, so the process is kept alive and reopening the app is immediate.
+     */
+    private void dismissLockedTarget(ActivityRecord target, String reason) {
+        if (target == null || target.finishing) return;
+        Task task = target.getTask();
+        if (task == null) {
+            target.finishIfPossible(reason, false);
+            return;
+        }
+        if (task.getDisplayId() != Display.DEFAULT_DISPLAY) {
+            // A floating window on a secondary display has no home task behind it, and its owner
+            // (e.g. LMOFreeform) only tears the window down once the task is gone. Closing the app
+            // is what the user expects instead of leaving an empty black window behind.
+            task.forAllActivities(ar -> {
+                if (!ar.finishing) {
+                    ar.finishIfPossible(reason, false);
+                }
+            });
+            return;
+        }
+        TaskDisplayArea displayArea = task.getDisplayArea();
+        task.moveToBack(reason, null);
+        if (displayArea != null) {
+            displayArea.moveHomeRootTaskToFront(reason);
+        }
+    }
+
+    /**
+     * Called when a task is started from recents. Only ON_LEAVE drops the other sessions;
+     * doing it unconditionally made every behaviour relock like ON_LEAVE.
+     */
+    public void onStartActivityFromRecents(Task task) {
+        if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_LEAVE) {
+            clearUnlockedApp();
+        }
+        lockTopApp(task, "startActivityFromRecents");
+    }
+
+    /**
+     * Called when an activity pauses. This is the reliable "left the app" signal: it fires for
+     * the home button, gesture navigation, back and task switches alike, whereas the resume
+     * path is skipped for some of them.
+     */
+    public void onActivityPaused(ActivityRecord r) {
+        if (r == null || !hasLockedPackages()) return;
+        if (mRepository.getLockBehavior() != LOCK_BEHAVIOR_ON_LEAVE) return;
+        if (!mRepository.isAppLocked(r.packageName, r.mUserId)) return;
+        final String packageName = r.packageName;
+        final int userId = r.mUserId;
+        // Re-evaluate once the next activity has resumed; at pause time the top may still be
+        // the pausing activity.
+        mAtms.mH.post(() -> {
+            synchronized (mAtms.mGlobalLock) {
+                ActivityRecord top = mAtms.mRootWindowContainer.getTopResumedActivity();
+                // Our own credential screen is on top: keep the session unlocked.
+                if (top != null && top.intent != null
+                        && isAuthActivity(top.intent.getComponent())) {
+                    return;
+                }
+                // The app is still in the foreground (in-app navigation).
+                if (top != null && top.mUserId == userId
+                        && TextUtils.equals(top.packageName, packageName)) {
+                    return;
+                }
+                markSessionLocked(packageName, userId);
+            }
+        });
+    }
+
+    /**
+     * Called when a transition involving recents finishes. The session reset is ON_LEAVE only;
+     * running it unconditionally made ON_SCREEN_OFF / TIMEOUT / ON_KILL relock like ON_LEAVE.
+     */
+    public void onRecentsTransition(ActivityRecord focusedApp) {
+        if (mRepository.getLockBehavior() == LOCK_BEHAVIOR_ON_LEAVE) {
+            clearUnlockedApp(focusedApp);
         }
     }
 
@@ -528,13 +623,13 @@ public class AppLockService {
         }
         lockAllSessionsExcept(keep);
 
-        final long now = SystemClock.elapsedRealtime();
-        for (String k : keep) {
-            mUnlockTimestamps.put(k, now);
-        }
-
-        if (WindowConfiguration.isFloating(r.getWindowingMode())) {
-            lockVisibleFullscreenApps(mAtms.mWindowManager.getDefaultDisplayContentLocked());
+        // Refreshing the timestamps on every resume made the timeout look permanently fresh.
+        // Only touch them for behaviours that do not measure idle time.
+        if (mRepository.getLockBehavior() != LOCK_BEHAVIOR_TIMEOUT) {
+            final long now = SystemClock.elapsedRealtime();
+            for (String k : keep) {
+                mUnlockTimestamps.put(k, now);
+            }
         }
     }
 
@@ -571,8 +666,18 @@ public class AppLockService {
     }
 
     public void cleanupPackage(String packageName) {
-        cleanupPackage(packageName, 0);
-        cleanupPackage(packageName, 999);
+        if (mContext == null) {
+            cleanupPackage(packageName, UserHandle.USER_SYSTEM);
+            return;
+        }
+        UserManager userManager = mContext.getSystemService(UserManager.class);
+        if (userManager == null) {
+            cleanupPackage(packageName, UserHandle.USER_SYSTEM);
+            return;
+        }
+        for (UserHandle user : userManager.getUserProfiles()) {
+            cleanupPackage(packageName, user.getIdentifier());
+        }
     }
 
     public boolean isSandboxActivity(ComponentName componentName) {
@@ -819,13 +924,22 @@ public class AppLockService {
         target.finishIfPossible("applock-duplicate-pending", false);
     }
 
+    /**
+     * Hides a locked target that is already on screen so its content is not exposed while the
+     * auth prompt comes up.
+     *
+     * <p>Only targets that are actually visible need this. Calling
+     * {@link ActivityRecord#setVisibility(boolean)} on an activity that is still waiting for its
+     * first frame puts it into the pending transition as an occluded participant, and since it
+     * will never draw, the transition blocks until the sync timeout (2s for a change transition).
+     * That is what froze the screen for 2-3s when switching between two locked apps: the launch
+     * animation was held back instead of playing into the prompt.
+     */
     private void hideBlockedTarget(ActivityRecord target) {
-        if (target == null) {
+        if (target == null || target.finishing || !target.isVisible()) {
             return;
         }
-        if (!target.finishing) {
-            target.setVisibility(false);
-        }
+        target.setVisibility(false);
         abortAnimation(target);
     }
 
@@ -840,57 +954,13 @@ public class AppLockService {
         r.abortAndClearOptionsAnimation();
     }
 
-    private void lockVisibleMultiWindowApps(DisplayContent dc) {
-        if (dc == null) {
-            dc = mAtms.mWindowManager.getDefaultDisplayContentLocked();
-        }
-        if (dc == null) return;
-        dc.getDefaultTaskDisplayArea().forAllTasks(task -> {
-            if (task.isLeafTask()
-                    && (WindowConfiguration.inMultiWindowMode(task.getWindowingMode())
-                            || WindowConfiguration.isFloating(task.getWindowingMode()))
-                    && task.isVisible()) {
-                ActivityRecord r = task.topRunningActivityLocked();
-                if (isAppLocked(r)) {
-                    markSessionUnlocked(r.packageName, r.mUserId);
-                }
-            }
-        });
-    }
-
-    private void lockVisibleFullscreenApps(DisplayContent dc) {
-        if (dc == null) {
-            dc = mAtms.mWindowManager.getDefaultDisplayContentLocked();
-        }
-        if (dc == null) return;
-        dc.getDefaultTaskDisplayArea().forAllTasks(task -> {
-            if (task.isLeafTask() && task.getWindowingMode() == WindowConfiguration.WINDOWING_MODE_FULLSCREEN
-                    && task.isVisible()) {
-                ActivityRecord r = task.topRunningActivityLocked();
-                if (isAppLocked(r)) {
-                    markSessionUnlocked(r.packageName, r.mUserId);
-                }
-            }
-        });
-    }
-
-    private void ensureResolveInfo(int userId) {
-        if (mSandboxResolveInfo == null || mCurrentUserId != userId) {
-            try {
-                List<ResolveInfo> list = mContext.getPackageManager()
-                        .queryIntentActivitiesAsUser(getConfirmIntent(), PackageManager.MATCH_SYSTEM_ONLY, userId);
-                if (list != null) {
-                    for (ResolveInfo ri : list) {
-                        if (ri.activityInfo != null && (ri.activityInfo.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
-                            mSandboxResolveInfo = ri;
-                            mCurrentUserId = userId;
-                            break;
-                        }
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-        }
+    /**
+     * Resolves the credential activity once, while the system is booting, instead of lazily on
+     * the first app launch (which used to run a PackageManager query under the window manager
+     * lock).
+     */
+    public void init() {
+        getConfirmIntent();
     }
 
     private Intent getConfirmIntent() {
@@ -920,16 +990,6 @@ public class AppLockService {
             return (pm != null) ? sandboxIntent : appLockerIntent;
         }
         return mConfirmIntent;
-    }
-
-    private String resolveAppLabel(String packageName, int userId) {
-        try {
-            PackageManager pm = mContext.getPackageManager();
-            ApplicationInfo ai = pm.getApplicationInfoAsUser(packageName, 0, userId);
-            return pm.getApplicationLabel(ai).toString();
-        } catch (Exception e) {
-            return packageName;
-        }
     }
 
     private int getPackageUid(String packageName) {

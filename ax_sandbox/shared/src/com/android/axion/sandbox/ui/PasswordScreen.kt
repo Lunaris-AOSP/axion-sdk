@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -50,6 +51,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import com.android.axion.sandbox.security.SandboxSecurityManager.BiometricType
 import com.android.axion.sandbox.security.SandboxSecurityManager.BiometricType.FACE
 import com.android.axion.sandbox.security.SandboxSecurityManager.BiometricType.NONE
@@ -64,7 +66,7 @@ fun PasswordScreen(
     isSetup: Boolean = false,
     promptText: String? = null,
     onUnlock: () -> Unit,
-    onPasswordEntered: (String) -> Boolean,
+    onPasswordEntered: suspend (String) -> Boolean,
     confirmPassword: String? = null,
     onBack: (() -> Unit)? = null,
     biometricType: BiometricType = NONE,
@@ -108,14 +110,17 @@ fun PasswordScreen(
 
     val shakeTranslation = if (isError.value) (sin(shakeOffset * 4 * PI.toFloat()) * 16f) else 0f
 
+    val verifyScope = rememberCoroutineScope()
     val submitAction: () -> Unit = {
         if (enteredPassword.value.length >= 4) {
-            if (onPasswordEntered(enteredPassword.value)) {
-                onUnlock()
-            } else {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                isError.value = true
-                errorMessage.value = getPasswordErrorMessage(isSetup, confirmPassword != null, errorMismatch, errorIncorrect)
+            verifyScope.launch {
+                if (onPasswordEntered(enteredPassword.value)) {
+                    onUnlock()
+                } else {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    isError.value = true
+                    errorMessage.value = getPasswordErrorMessage(isSetup, confirmPassword != null, errorMismatch, errorIncorrect)
+                }
             }
         }
     }

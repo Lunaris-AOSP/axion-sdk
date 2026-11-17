@@ -13,6 +13,7 @@ import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 
 enum class SecurityType {
@@ -85,11 +86,17 @@ class SandboxSecurityManager(private val context: Context) {
                Settings.Secure.putString(context.contentResolver, KEY_CREDENTIAL_HASH, hash)
     }
     
-    fun verifyCredential(credential: String): Boolean {
-        return verifyStoredCredential(credential, KEY_CREDENTIAL_HASH)
+    /**
+     * PBKDF2 with 20k iterations takes tens of milliseconds, so it must never run on the
+     * main thread.
+     */
+    suspend fun verifyCredential(credential: String): Boolean {
+        return withContext(Dispatchers.Default) {
+            verifyStoredCredential(credential, KEY_CREDENTIAL_HASH)
+        }
     }
     
-    fun verifyPattern(pattern: List<Int>): Boolean {
+    suspend fun verifyPattern(pattern: List<Int>): Boolean {
         val patternString = pattern.joinToString(",")
         return verifyCredential(patternString)
     }

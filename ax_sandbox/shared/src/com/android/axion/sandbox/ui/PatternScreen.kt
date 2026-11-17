@@ -64,7 +64,7 @@ fun PatternScreen(
     isSetup: Boolean = false,
     promptText: String? = null,
     onUnlock: () -> Unit,
-    onPatternEntered: (List<Int>) -> Boolean,
+    onPatternEntered: suspend (List<Int>) -> Boolean,
     confirmPattern: List<Int>? = null,
     onBack: (() -> Unit)? = null,
     biometricType: BiometricType = NONE,
@@ -119,6 +119,7 @@ fun PatternScreen(
 
     val shakeTranslation = if (isError.value) (sin(shakeOffset * 4 * PI.toFloat()) * 16f) else 0f
 
+    val verifyScope = rememberCoroutineScope()
     fun submitPattern() {
         val currentSelected = selectedDots.value
         if (currentSelected.isEmpty()) return
@@ -127,13 +128,15 @@ fun PatternScreen(
             isError.value = true
             return
         }
-        if (onPatternEntered(currentSelected)) {
-            onUnlock()
-            return
+        verifyScope.launch {
+            if (onPatternEntered(currentSelected)) {
+                onUnlock()
+                return@launch
+            }
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            errorMessage.value = getPatternErrorMessage(isSetup, confirmPattern != null, errorMismatch, errorIncorrect)
+            isError.value = true
         }
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        errorMessage.value = getPatternErrorMessage(isSetup, confirmPattern != null, errorMismatch, errorIncorrect)
-        isError.value = true
     }
 
     val density = LocalDensity.current

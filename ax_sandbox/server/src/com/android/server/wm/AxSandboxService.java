@@ -75,6 +75,17 @@ public final class AxSandboxService extends SystemService {
         }
     };
 
+    private final BroadcastReceiver mUserSwitchedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || !Intent.ACTION_USER_SWITCHED.equals(intent.getAction())) {
+                return;
+            }
+            // The behaviour and timeout settings are read for the current user only.
+            mAppLockRepository.reload();
+        }
+    };
+
     private static volatile AxSandboxService sInstance;
 
     public static AxSandboxService get() {
@@ -120,11 +131,20 @@ public final class AxSandboxService extends SystemService {
         mAppHideRepository.init();
         mIsolationRepository.init();
         mSpoofRepository.init();
+        // Resolve the credential activity once instead of on the first locked app launch.
+        mAppLockService.init();
 
         try {
             IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_FULLY_REMOVED);
             filter.addDataScheme("package");
             mContext.registerReceiverAsUser(mPackageRemovedReceiver, UserHandle.ALL, filter, null, mAtms.mH);
+        } catch (Exception ignored) {
+        }
+
+        try {
+            IntentFilter userFilter = new IntentFilter(Intent.ACTION_USER_SWITCHED);
+            mContext.registerReceiverAsUser(mUserSwitchedReceiver, UserHandle.ALL, userFilter, null,
+                    mAtms.mH);
         } catch (Exception ignored) {
         }
     }
@@ -189,12 +209,20 @@ public final class AxSandboxService extends SystemService {
         mAppLockService.lockTopApp(task, reason);
     }
 
-    public void onAppFocusChanged(ActivityRecord newFocus, Task newTask) {
-        mAppLockService.onAppFocusChanged(newFocus, newTask);
+    public void onStartActivityFromRecents(Task task) {
+        mAppLockService.onStartActivityFromRecents(task);
     }
 
-    public void onWindowingModeChanged(Task task, int prevWindowingMode) {
-        mAppLockService.onWindowingModeChanged(task, prevWindowingMode);
+    public void onRecentsTransition(ActivityRecord focusedApp) {
+        mAppLockService.onRecentsTransition(focusedApp);
+    }
+
+    public void onActivityPaused(ActivityRecord r) {
+        mAppLockService.onActivityPaused(r);
+    }
+
+    public void onAppFocusChanged(ActivityRecord newFocus, Task newTask) {
+        mAppLockService.onAppFocusChanged(newFocus, newTask);
     }
 
     public void onAppDied(String packageName, int userId) {
