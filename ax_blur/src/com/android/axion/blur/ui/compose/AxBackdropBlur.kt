@@ -44,6 +44,7 @@ import androidx.compose.ui.geometry.takeOrElse
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RenderEffect
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
@@ -82,6 +83,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.toIntSize
 import androidx.compose.ui.unit.toSize
+import com.android.axion.blur.AxAdvancedBlur
+import com.android.axion.blur.AxAdvancedBlurEffect
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
 import com.android.axion.blur.model.AxBackdropBlurSettingsModel
 import com.android.axion.blur.model.AxBackdropBlurSettingsSubscription
@@ -251,16 +254,16 @@ internal class AxBackdropBlurArea {
 }
 
 private data class AxBackdropBlurSourceGeometry(
-    val position: Offset = Offset.Unspecified,
-    val size: Size = Size.Unspecified,
-    val windowId: Any? = null,
+    var position: Offset = Offset.Unspecified,
+    var size: Size = Size.Unspecified,
+    var windowId: Any? = null,
 )
 
 private data class AxBackdropBlurNodeGeometry(
-    val position: Offset = Offset.Unspecified,
-    val size: Size = Size.Unspecified,
-    val rootBounds: Rect = Rect.Zero,
-    val windowId: Any? = null,
+    var position: Offset = Offset.Unspecified,
+    var size: Size = Size.Unspecified,
+    var rootBounds: Rect = Rect.Zero,
+    var windowId: Any? = null,
 )
 
 private fun resolvePositionStrategy(
@@ -385,9 +388,8 @@ private class AxBackdropBlurSourceNode(
 
     override fun onRemeasured(size: IntSize) {
         val newSize = size.toSize()
-        val nextGeometry = geometry.copy(size = newSize)
-        if (geometry != nextGeometry) {
-            geometry = nextGeometry
+        if (geometry.size != newSize) {
+            geometry.size = newSize
             area.size = newSize
             area.notifyChanged()
         }
@@ -444,13 +446,11 @@ private class AxBackdropBlurSourceNode(
         val newPosition = newBounds?.topLeft ?: Offset.Unspecified
         val newSize = newBounds?.size ?: Size.Unspecified
         val newWindowId = currentWindowId()
-        val nextGeometry = AxBackdropBlurSourceGeometry(
-            position = newPosition,
-            size = newSize,
-            windowId = newWindowId,
-        )
-        if (geometry != nextGeometry) {
-            geometry = nextGeometry
+        if (geometry.position != newPosition || geometry.size != newSize
+            || geometry.windowId != newWindowId) {
+            geometry.position = newPosition
+            geometry.size = newSize
+            geometry.windowId = newWindowId
             area.position = newPosition
             area.size = newSize
             area.windowId = newWindowId
@@ -522,6 +522,8 @@ private class AxBackdropBlurNode(
     private var areas = emptyList<AxBackdropBlurArea>()
     private var layer: GraphicsLayer? = null
     private var renderEffect: RenderEffect? = null
+    private var advancedBlurEffect: AxAdvancedBlurEffect? = null
+    private var advancedBlurContext: Context? = null
     private var renderEffectRadius = -1f
     private var nativeBackdropBlur: AxViewBackdropBlur? = null
     private var nativeBackdropBlurView: View? = null
@@ -593,8 +595,7 @@ private class AxBackdropBlurNode(
         nativeBackdropBlur = null
         nativeBackdropBlurView = null
         clearAreaListeners()
-        layer?.let { requireGraphicsContext().releaseGraphicsLayer(it) }
-        layer = null
+        releaseSourceLayer()
         geometry = AxBackdropBlurNodeGeometry()
         skipNextHostDirty = false
     }
@@ -615,9 +616,8 @@ private class AxBackdropBlurNode(
 
     override fun onRemeasured(size: IntSize) {
         val newSize = size.toSize()
-        val nextGeometry = geometry.copy(size = newSize)
-        if (geometry != nextGeometry) {
-            geometry = nextGeometry
+        if (geometry.size != newSize) {
+            geometry.size = newSize
             invalidateDraw()
         }
     }
@@ -638,9 +638,14 @@ private class AxBackdropBlurNode(
             } else {
                 settings.blurRadiusPx
             }
-            val blurRadius = if (settings.enabled) requestedBlurRadius else 0f
+            val blurRadius = when {
+                !settings.enabled -> 0f
+                settings.advancedBlurEnabled -> AxAdvancedBlur.radiusPx(context)
+                else -> requestedBlurRadius
+            }
             val effect = blurEffect(blurRadius)
-            val tint = resolveColor(style.tint) { AxBlurColors.tint(context) }
+            val tint = if (settings.advancedBlurEnabled) Color.Transparent
+                else resolveColor(style.tint) { AxBlurColors.tint(context) }
             val fallbackColor = resolveColor(style.fallbackColor) {
                 AxBlurColors.fallback(context)
             }
@@ -651,10 +656,13 @@ private class AxBackdropBlurNode(
             }
             val sourceFirst = state.resolvedPositionStrategy == AxBackdropBlurPositionStrategy.Local
             if (!sourceFirst && drawCrossWindowBackdrop(blurRadius, tint, cornerRadius)) {
+                releaseSourceLayer()
                 drawContent()
                 return
             }
-            val blurLayerGeometry = layerGeometry(blurRadius)
+            val blurLayerGeometry = layerGeometry(
+                AxAdvancedBlur.sourceOutset(context, blurRadius, settings.advancedBlurEnabled).toFloat(),
+            )
             if (canDrawBackdrop(effect, blurLayerGeometry)) {
                 val targetLayer = layer?.takeUnless { it.isReleased }
                     ?: requireGraphicsContext().createGraphicsLayer().also { layer = it }
@@ -695,7 +703,20 @@ private class AxBackdropBlurNode(
                         }
                     }
                 }
-                targetLayer.renderEffect = effect
+                targetLayer.renderEffect = if (settings.advancedBlurEnabled) {
+                    val material = advancedBlurEffect?.takeIf { advancedBlurContext === context }
+                        ?: AxAdvancedBlurEffect(context).also {
+                            advancedBlurEffect = it
+                            advancedBlurContext = context
+                        }
+                    val offset = blurLayerGeometry.offset
+                    material.resolve(
+                        blurRadius, offset.x, offset.y,
+                        offset.x + size.width, offset.y + size.height, cornerRadius,
+                    )?.asComposeRenderEffect()
+                } else {
+                    effect
+                }
                 clipRect {
                     translate(-blurLayerGeometry.offset.x, -blurLayerGeometry.offset.y) {
                         drawLayer(targetLayer)
@@ -703,6 +724,7 @@ private class AxBackdropBlurNode(
                 }
                 drawOverlay(tint)
             } else {
+                releaseSourceLayer()
                 if (sourceFirst && drawCrossWindowBackdrop(blurRadius, tint, cornerRadius)) {
                     drawContent()
                     return
@@ -727,6 +749,8 @@ private class AxBackdropBlurNode(
             sourceAndroidMatrix.setFrom(sourceMatrix)
             blur.setSourceToLocalTransform(sourceAndroidMatrix, it.size.width, it.size.height)
         }
+        blur.setSettingsEnabled(settingsValues?.enabled == true)
+        blur.setAdvancedBlurEnabled(settingsValues?.advancedBlurEnabled == true)
         blur.setBlurRadiusPx(blurRadius)
         val boundsLeft = 0
         val boundsTop = 0
@@ -804,20 +828,25 @@ private class AxBackdropBlurNode(
         val rootCoordinates = coordinates.findRootCoordinates()
         val newRootBounds = rootCoordinates.boundsForAxBlur(strategy) ?: Rect.Zero
         val newWindowId = currentWindowId()
-        val nextGeometry = AxBackdropBlurNodeGeometry(
-            position = newPosition,
-            size = newSize,
-            rootBounds = newRootBounds,
-            windowId = newWindowId,
-        )
-        if (geometry != nextGeometry) {
-            geometry = nextGeometry
+        if (geometry.position != newPosition || geometry.size != newSize
+            || geometry.rootBounds != newRootBounds || geometry.windowId != newWindowId) {
+            geometry.position = newPosition
+            geometry.size = newSize
+            geometry.rootBounds = newRootBounds
+            geometry.windowId = newWindowId
             if (refreshAreas) updateAreas()
             invalidateDraw()
         }
     }
 
-    private fun layerGeometry(blurRadius: Float): AxBackdropBlurLayerGeometry {
+    private fun releaseSourceLayer() {
+        layer?.takeUnless { it.isReleased }?.let { requireGraphicsContext().releaseGraphicsLayer(it) }
+        layer = null
+        advancedBlurEffect = null
+        advancedBlurContext = null
+    }
+
+    private fun layerGeometry(padding: Float): AxBackdropBlurLayerGeometry {
         if (
             !geometry.position.isSpecified ||
             !geometry.size.isSpecified ||
@@ -827,8 +856,8 @@ private class AxBackdropBlurNode(
             return AxBackdropBlurLayerGeometry(Rect.Zero, Offset.Zero)
         }
         val nodeBounds = Rect(geometry.position, geometry.size)
-        val expandedBounds = if (blurRadius >= 1f) {
-            nodeBounds.inflate(blurRadius)
+        val expandedBounds = if (padding > 0f) {
+            nodeBounds.inflate(padding)
         } else {
             nodeBounds
         }
@@ -854,7 +883,7 @@ private class AxBackdropBlurNode(
         effect: RenderEffect?,
         blurLayerGeometry: AxBackdropBlurLayerGeometry,
     ): Boolean {
-        return effect?.isSupported() == true &&
+        return (settingsValues?.advancedBlurEnabled == true || effect?.isSupported() == true) &&
             blurLayerGeometry.size.isSpecified &&
             blurLayerGeometry.size.width > 0f &&
             blurLayerGeometry.size.height > 0f &&

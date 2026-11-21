@@ -19,11 +19,15 @@ package com.android.axion.blur
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Outline
 import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.DrawableWrapper
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.view.View
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 import com.android.axion.blur.ui.view.AxViewBackdropBlur
@@ -54,6 +58,10 @@ class AxBlurBackgroundRenderer @JvmOverloads constructor(
 
     fun setEnabled(enabled: Boolean) {
         blur.setEnabled(enabled)
+    }
+
+    fun setBackdropMaterial(backdrop: Boolean) {
+        blur.setBackdropMaterial(backdrop)
     }
 
     fun isCrossWindowBlurActive(): Boolean {
@@ -140,6 +148,63 @@ class AxBlurBackgroundRenderer @JvmOverloads constructor(
     fun createBackgroundDrawable(background: GradientDrawable, overlayColor: Int): GradientDrawable {
         return if (!isCrossWindowBlurActive()) background
             else BlurGradientDrawable(this, background, overlayColor)
+    }
+
+    fun createGlassBackgroundDrawable(background: Drawable): Drawable {
+        val copy = background.constantState?.newDrawable(view.resources)?.mutate()
+        if (copy is LayerDrawable && copy !== background) {
+            copyBackgroundPaint(background, copy)
+            for (index in 0 until copy.numberOfLayers) {
+                if (copy.getId(index) == android.R.id.mask) continue
+                val content = copy.getDrawable(index) ?: continue
+                copy.setDrawable(index, GlassBackgroundDrawable(this, content))
+                break
+            }
+            return copy
+        }
+        return GlassBackgroundDrawable(this, background)
+    }
+
+    private fun copyBackgroundPaint(source: Drawable, target: Drawable) {
+        target.alpha = source.alpha
+        target.colorFilter = source.colorFilter
+        target.state = source.state
+        target.level = source.level
+        if (source is LayerDrawable && target is LayerDrawable) {
+            for (index in 0 until min(source.numberOfLayers, target.numberOfLayers)) {
+                val sourceChild = source.getDrawable(index)
+                val targetChild = target.getDrawable(index)
+                if (sourceChild != null && targetChild != null) copyBackgroundPaint(sourceChild, targetChild)
+            }
+        } else if (source is DrawableWrapper && target is DrawableWrapper) {
+            val sourceChild = source.drawable
+            val targetChild = target.drawable
+            if (sourceChild != null && targetChild != null) copyBackgroundPaint(sourceChild, targetChild)
+        }
+    }
+
+    private class GlassBackgroundDrawable(
+        private val renderer: AxBlurBackgroundRenderer,
+        background: Drawable,
+    ) : DrawableWrapper(background) {
+        private val outline = Outline()
+
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
+        override fun draw(canvas: Canvas) {
+            outline.setEmpty()
+            drawable?.getOutline(outline)
+            val radius = outline.radius.takeIf { it >= 0f }
+                ?: min(bounds.width(), bounds.height()) * 0.5f
+            if (!renderer.draw(canvas, bounds.left, bounds.top, bounds.right, bounds.bottom,
+                    radius, Color.TRANSPARENT, alpha)) super.draw(canvas)
+        }
+
+        override fun setVisible(visible: Boolean, restart: Boolean): Boolean {
+            val changed = super.setVisible(visible, restart)
+            if (!visible) renderer.clear()
+            return changed
+        }
     }
 
     @JvmOverloads
@@ -317,6 +382,8 @@ class AxBlurBackgroundRenderer @JvmOverloads constructor(
     ) : GradientDrawable() {
         private val key = Any()
 
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
         init {
             setShape(source.shape)
             val color = source.color
@@ -362,7 +429,7 @@ class AxBlurBackgroundRenderer @JvmOverloads constructor(
                     drawAlpha,
                 )
             }
-            if (!drewBlur && drawAlpha > 0 && !renderer.isCrossWindowBlurActive()) {
+            if (!drewBlur && drawAlpha > 0) {
                 super.draw(canvas)
             }
         }

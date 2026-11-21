@@ -20,9 +20,13 @@ import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Outline
+import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.DrawableWrapper
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
+import android.graphics.drawable.RippleDrawable
 import android.view.View
 import android.view.ViewTreeObserver
 import android.view.Window
@@ -102,14 +106,16 @@ class AxWindowBlurController @JvmOverloads constructor(
 
     private fun apply(settings: AxBackdropBlurSettingsModel) {
         val radius = settings.blurRadiusPx.roundToInt()
-        val supportedRadius = if (AxBlurSupport.supportsCrossWindowBlur() && !AxBlurProperties.disableBlur) {
+        val supported = AxBlurSupport.supportsCrossWindowBlur() && !AxBlurProperties.disableBlur
+        val supportedRadius = if (supported) {
             radius
         } else {
             0
         }
-        val alpha = if (supportedRadius > 0) surfaceAlpha.sanitizedAlpha() else 255
+        val advancedBlurEnabled = settings.advancedBlurEnabled && supported
+        val alpha = if (supportedRadius > 0 || advancedBlurEnabled) surfaceAlpha.sanitizedAlpha() else 255
         applyWindowBlur(supportedRadius)
-        applySurfaceBlur(supportedRadius, alpha)
+        applySurfaceBlur(supportedRadius, alpha, advancedBlurEnabled)
     }
 
     private fun applyWindowBlur(radius: Int) {
@@ -140,9 +146,9 @@ class AxWindowBlurController @JvmOverloads constructor(
         }
     }
 
-    private fun applySurfaceBlur(radius: Int, alpha: Int) {
+    private fun applySurfaceBlur(radius: Int, alpha: Int, advancedBlurEnabled: Boolean) {
         surfaces.forEach { (view, state) ->
-            state.apply(view, context, radius, alpha)
+            state.apply(view, context, radius, alpha, advancedBlurEnabled)
         }
     }
 
@@ -180,12 +186,22 @@ class AxWindowBlurController @JvmOverloads constructor(
     ) {
         private var blurDrawable: BackgroundBlurDrawable? = null
         private var layerDrawable: LayerDrawable? = null
+        private var glassDrawable: Drawable? = null
         private var surfaceBackground: Drawable? = originalBackground?.mutate()
+        private data class ExistingBlurState(
+            val radius: Int,
+            val glassMode: Int,
+            val density: Float,
+            val visible: Boolean,
+            val shader: String?,
+            val shaderTint: Int,
+        )
+        private var originalBlurState = captureBlurState(surfaceBackground)
         private val outline = Outline()
 
-        fun apply(view: View, context: Context, radius: Int, alpha: Int) {
+        fun apply(view: View, context: Context, radius: Int, alpha: Int, advancedBlurEnabled: Boolean) {
             captureExternalBackground(view)
-            if (radius <= 0) {
+            if (radius <= 0 && !advancedBlurEnabled) {
                 restore(view)
                 return
             }
@@ -193,6 +209,7 @@ class AxWindowBlurController @JvmOverloads constructor(
             if (existingBlur != null) {
                 existingBlur.setVisible(true, false)
                 existingBlur.setBlurRadius(radius)
+                AxAdvancedBlur.apply(existingBlur, context, advancedBlurEnabled)
                 existingBlur.setAlpha(255)
                 view.background = existingBlur
                 return
@@ -204,8 +221,10 @@ class AxWindowBlurController @JvmOverloads constructor(
                 return
             }
             blur.setVisible(true, false)
+            blur.setApplyRenderNodeAlpha(true)
             blur.setAlpha(255)
             blur.setBlurRadius(radius)
+            AxAdvancedBlur.apply(blur, context, advancedBlurEnabled)
             blur.setColor(
                 if (surfaceBackground == null) {
                     AxBlurColors.tint(context)
@@ -214,12 +233,29 @@ class AxWindowBlurController @JvmOverloads constructor(
                 },
             )
             applyCorners(blur)
-            val overlay = surfaceBackground
+            val overlay = surfaceBackground.takeUnless { advancedBlurEnabled }
             if (overlay == null) {
-                view.background = blur
+                surfaceBackground.applyAlpha(originalAlpha)
+                view.background = if (surfaceBackground == null) blur else {
+                    glassDrawable ?: GlassSurfaceDrawable(blur, surfaceBackground!!).also {
+                        glassDrawable = it
+                    }
+                }
             } else {
                 overlay.applyAlpha(alpha)
-                view.background = layerDrawable ?: LayerDrawable(arrayOf(blur, overlay)).also {
+                view.background = layerDrawable ?: object : LayerDrawable(arrayOf(blur, overlay)) {
+                    private val fallback = overlay.constantState?.newDrawable(view.resources)
+                        ?.mutate()?.apply { this.alpha = originalAlpha } ?: overlay
+                    override fun draw(canvas: android.graphics.Canvas) {
+                        if (canvas.isHardwareAccelerated) super.draw(canvas)
+                        else {
+                            fallback.bounds = bounds
+                            fallback.state = overlay.state
+                            fallback.level = overlay.level
+                            fallback.draw(canvas)
+                        }
+                    }
+                }.also {
                     layerDrawable = it
                 }
             }
@@ -228,25 +264,52 @@ class AxWindowBlurController @JvmOverloads constructor(
         fun restore(view: View) {
             blurDrawable?.setVisible(false, false)
             blurDrawable?.setBlurRadius(0)
+            blurDrawable?.setGlassBlur(BackgroundBlurDrawable.GLASS_MODE_NONE, 1f)
+            val existingBlur = surfaceBackground as? BackgroundBlurDrawable
+            originalBlurState?.let { state ->
+                existingBlur?.setBlurRadius(state.radius)
+                if (state.shader != null) {
+                    existingBlur?.setAdvancedBlurShader(state.shader, state.density, state.shaderTint,
+                        state.glassMode == 4)
+                } else {
+                    existingBlur?.setGlassBlur(state.glassMode, state.density)
+                }
+                existingBlur?.setVisible(state.visible, false)
+            }
             surfaceBackground.applyAlpha(originalAlpha)
-            if (view.background === layerDrawable || view.background === blurDrawable) {
+            if (view.background === layerDrawable || view.background === blurDrawable
+                || view.background === glassDrawable) {
                 view.background = surfaceBackground
             }
             layerDrawable = null
+            glassDrawable = null
+            blurDrawable?.callback = null
+            blurDrawable = null
         }
 
         private fun captureExternalBackground(view: View) {
             val background = view.background
             if (
                 background !== layerDrawable &&
+                background !== glassDrawable &&
                 background !== blurDrawable &&
                 background !== surfaceBackground
             ) {
                 originalBackground = background
                 originalAlpha = background?.alpha ?: 255
                 surfaceBackground = background?.mutate()
+                originalBlurState = captureBlurState(surfaceBackground)
                 layerDrawable = null
+                glassDrawable = null
             }
+        }
+
+        private fun captureBlurState(background: Drawable?): ExistingBlurState? {
+            val blur = background as? BackgroundBlurDrawable ?: return null
+            return ExistingBlurState(
+                blur.getBlurRadius(), blur.getGlassMode(), blur.getGlassDensity(), blur.isVisible, blur.getAdvancedBlurShader(),
+                blur.getAdvancedBlurTint(),
+            )
         }
 
         private fun applyCorners(blur: BackgroundBlurDrawable) {
@@ -281,6 +344,60 @@ class AxWindowBlurController @JvmOverloads constructor(
 
         private fun FloatArray.cornerRadiusAt(index: Int): Float {
             return (this[index] + this[index + 1]) * 0.5f
+        }
+
+        private class GlassSurfaceDrawable(
+            private val blur: BackgroundBlurDrawable,
+            background: Drawable,
+        ) : DrawableWrapper(background) {
+            init { blur.callback = this }
+
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
+            override fun draw(canvas: android.graphics.Canvas) {
+                if (!canvas.isHardwareAccelerated) {
+                    super.draw(canvas)
+                    return
+                }
+                blur.callback = this
+                blur.bounds = bounds
+                blur.draw(canvas)
+                drawable?.let { drawOverlays(canvas, it, findFill(it)) }
+            }
+
+            private fun findFill(background: Drawable): Drawable? {
+                val current = background.current
+                if (current !== background) return findFill(current)
+                if (background is DrawableWrapper) return background.drawable?.let(::findFill)
+                if (background is LayerDrawable) {
+                    for (index in 0 until background.numberOfLayers) {
+                        if (background.getId(index) == android.R.id.mask) continue
+                        findFill(background.getDrawable(index))?.let { return it }
+                    }
+                    return null
+                }
+                return background.takeIf { it is GradientDrawable || it is ColorDrawable }
+            }
+
+            private fun drawOverlays(canvas: android.graphics.Canvas, background: Drawable,
+                fill: Drawable?) {
+                if (background === fill) return
+                val current = background.current
+                if (current !== background) {
+                    drawOverlays(canvas, current, fill)
+                } else if (background is DrawableWrapper) {
+                    background.drawable?.let { drawOverlays(canvas, it, fill) }
+                } else if (background is LayerDrawable) {
+                    for (index in 0 until background.numberOfLayers) {
+                        if (background.getId(index) != android.R.id.mask) {
+                            drawOverlays(canvas, background.getDrawable(index), fill)
+                        }
+                    }
+                    if (background is RippleDrawable) background.drawRippleOnly(canvas)
+                } else {
+                    background.draw(canvas)
+                }
+            }
         }
 
         companion object {

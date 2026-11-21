@@ -18,9 +18,11 @@ package com.android.axion.blur.domain.interactor
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.android.axion.blur.AxBlurSupport
 import com.android.axion.blur.data.repository.AxBackdropBlurSettingsRepository
 import com.android.axion.blur.model.AxBackdropBlurSettingsModel
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
+import com.android.axion.blur.model.AxBackdropBlurSettingsSpec.AdvancedBlurTarget
 import com.android.axion.blur.model.AxBackdropBlurSettingsSubscription
 
 internal class AxBackdropBlurInteractor(
@@ -41,10 +43,24 @@ internal class AxBackdropBlurInteractor(
                 blurRadiusPx = 0f,
             )
         }
-        val radius = repository.secureFloat(spec.radiusKey, defaultRadius)
+        val preset = repository.advancedBlurConfig()?.takeIf {
+            when (spec.advancedBlurTarget) {
+                AdvancedBlurTarget.SYSTEM -> true
+                AdvancedBlurTarget.QS -> it.qsBlurEnabled
+                AdvancedBlurTarget.LAUNCHER -> it.launcherBlurEnabled
+            }
+        }
+        val advancedBlurEnabled = preset != null && AxBlurSupport.supportsCrossWindowBlur()
+        val radius = if (preset != null && advancedBlurEnabled) {
+            preset.blurDp * appContext.resources.displayMetrics.density
+        } else {
+            repository.secureFloat(spec.radiusKey, defaultRadius)
+        }
         return AxBackdropBlurSettingsModel(
             enabled = true,
-            blurRadiusPx = radius.sanitize(maxRadius),
+            blurRadiusPx = if (advancedBlurEnabled) radius else radius.sanitize(maxRadius),
+            advancedBlurEnabled = advancedBlurEnabled,
+            advancedBlurConfig = preset,
         )
     }
 

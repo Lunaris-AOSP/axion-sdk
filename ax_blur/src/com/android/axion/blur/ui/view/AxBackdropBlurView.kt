@@ -22,6 +22,7 @@ import android.graphics.Color as AndroidColor
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderEffect as AndroidRenderEffect
 import android.graphics.RenderNode
@@ -32,8 +33,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
+import com.android.axion.blur.AxAdvancedBlur
+import com.android.axion.blur.AxAdvancedBlurEffect
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
 import com.android.axion.blur.ui.view.AxViewBackdropBlur
+import com.android.internal.graphics.AdvancedBlurConfig
 import kotlin.math.roundToInt
 
 open class AxBackdropBlurSourceLayout @JvmOverloads constructor(
@@ -91,6 +95,13 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     defStyleAttr: Int = 0,
 ) {
     private val blurNode = RenderNode("AxBackdropBlur")
+    private var advancedBlurEffect: AxAdvancedBlurEffect? = null
+    private var advancedBlurEnabled = false
+    private var advancedBlurPreset: AdvancedBlurConfig? = null
+    private var sourceOffsetX = 0
+    private var sourceOffsetY = 0
+    private val sourceCaptureBounds = RectF()
+    private val sourceCaptureRect = Rect()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
     private val rect = RectF()
@@ -99,7 +110,6 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         setEnabled(true)
     }
     private val transformMatrix = Matrix()
-    private val sourceBounds = RectF()
     private var blurEffect: AndroidRenderEffect? = null
     private var blurEffectRadius = -1f
     private var observedSource: AxBackdropBlurSourceLayout? = null
@@ -108,13 +118,15 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     private var useSettingsTint = true
     private var useSettingsFallback = true
     private var enabled = true
+    private var visibilityAggregated = true
+    private var settingsEnabled = true
     private var preferSourceBlur = false
     private var requireSourceBlur = false
     private var forceSourceBlurUpdate = false
     private var sourceBlurUpdateSuppressed = false
     private var sourceBlurRecorded = false
     private var sourceBlurDirty = true
-    private var recordedSourceState = SourceRecord()
+    private val recordedSourceState = SourceRecord()
     private var storedBlurRadiusPx = 0f
     private var storedBackdropTintColor = AndroidColor.TRANSPARENT
     private var storedFallbackColor = AndroidColor.TRANSPARENT
@@ -148,7 +160,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         }
 
     var backdropTintColor: Int
-        get() = storedBackdropTintColor
+        get() = if (advancedBlurEnabled) AndroidColor.TRANSPARENT else storedBackdropTintColor
         set(value) {
             useSettingsTint = false
             updateBackdropTintColor(value)
@@ -215,11 +227,16 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     fun onVisibilityAggregated(isVisible: Boolean) {
+        visibilityAggregated = isVisible
+        nativeBackdropBlur.onVisibilityAggregated(isVisible)
         if (isVisible) {
+            applySystemBlurSettings()
             view.invalidate()
         } else {
             clear()
         }
+        updateSourceObserver()
+        updatePreDrawObserver()
     }
 
     fun draw(canvas: Canvas) {
@@ -230,6 +247,9 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         if (this.enabled == enabled) return
         this.enabled = enabled
         if (!enabled) clear()
+        nativeBackdropBlur.setEnabled(enabled)
+        updateSourceObserver()
+        updatePreDrawObserver()
         view.invalidate()
     }
 
@@ -325,22 +345,43 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
 
     private fun applySystemBlurSettings() {
         val settings = blurInteractor.settings()
+        nativeBackdropBlur.setSettingsEnabled(settings.enabled)
+        if (settingsEnabled != settings.enabled) {
+            settingsEnabled = settings.enabled
+            view.invalidate()
+        }
+        if (advancedBlurEnabled != settings.advancedBlurEnabled) {
+            advancedBlurEnabled = settings.advancedBlurEnabled
+            blurEffect = null
+            sourceBlurDirty = true
+            view.invalidate()
+        }
+        val preset = settings.advancedBlurConfig.takeIf { settings.advancedBlurEnabled }
+        if (advancedBlurPreset !== preset) {
+            advancedBlurPreset = preset
+            sourceBlurDirty = true
+            view.invalidate()
+        }
+        nativeBackdropBlur.setAdvancedBlurEnabled(advancedBlurEnabled)
+        nativeBackdropBlur.updateAdvancedBlurRadius()
         val tint = AxBlurColors.tint(view.context)
         if (useSettingsBlurRadius) updateBlurRadiusPx(settings.blurRadiusPx)
         if (useSettingsTint) updateBackdropTintColor(tint)
         if (useSettingsFallback) {
             updateFallbackColor(
-                if (settings.enabled) tint else AxBlurColors.fallback(view.context),
+                if (settings.enabled && !advancedBlurEnabled) tint else AxBlurColors.fallback(view.context),
             )
         }
+        updateSourceObserver()
+        updatePreDrawObserver()
     }
 
     private fun updateBlurRadiusPx(value: Float) {
         val coerced = if (value.isFinite()) value.coerceAtLeast(0f) else 0f
         if (storedBlurRadiusPx != coerced) {
             storedBlurRadiusPx = coerced
-            blurEffect = null
             sourceBlurDirty = true
+            blurEffect = null
             view.invalidate()
         }
     }
@@ -360,9 +401,21 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     private fun drawBackdrop(canvas: Canvas) {
-        if (!enabled) return
-        if (!shouldDraw()) return
+        if (!enabled || !visibilityAggregated) return
+        if (!shouldDraw()) {
+            clear()
+            return
+        }
 
+        if (!settingsEnabled) {
+            clear()
+            drawColor(canvas, fallbackColor)
+            return
+        }
+        if (advancedBlurEnabled && sourceView != null && drawSourceBlur(canvas)) {
+            nativeBackdropBlur.clearCrossWindowBlur()
+            return
+        }
         if (preferSourceBlur) {
             val drewCrossWindow = drawCrossWindowBlur(canvas)
             if (drewCrossWindow && shouldUseCrossWindowBlur()) {
@@ -381,6 +434,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         }
 
         if (drawCrossWindowBlur(canvas)) {
+            if (sourceBlurRecorded) discardSourceBlur()
             drawColor(canvas, backdropTintColor)
             return
         }
@@ -407,7 +461,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         return forceSourceBlurUpdate ||
             sourceBlurDirty ||
             !sourceBlurRecorded ||
-            recordedSourceState != sourceRecordFor(source) ||
+            !recordedSourceState.matches(source) ||
             source.isDirty
     }
 
@@ -425,7 +479,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
 
     private fun canDrawNativeBlur(canvas: Canvas): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            blurRadiusPx.roundToInt() > 0 &&
+            (advancedBlurEnabled || blurRadiusPx.roundToInt() > 0) &&
             canvas.isHardwareAccelerated &&
             view.width > 0 &&
             view.height > 0
@@ -443,22 +497,35 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     private fun recordSource(source: View): Boolean {
-        val nextRecord = sourceRecordFor(source)
         if (source === view || source.width <= 0 || source.height <= 0) return false
-
-        blurNode.setPosition(0, 0, view.width, view.height)
-        val recordingCanvas = blurNode.beginRecording(view.width, view.height)
+        recordedSourceState.update(source)
+        val radius = if (advancedBlurEnabled) AxAdvancedBlur.radiusPx(view.context) else blurRadiusPx
+        val padding = AxAdvancedBlur.sourceOutset(view.context, radius, advancedBlurEnabled)
+        sourceCaptureBounds.set(0f, 0f, source.width.toFloat(), source.height.toFloat())
+        transformMatrix.mapRect(sourceCaptureBounds)
+        if (!sourceCaptureBounds.intersect(-padding.toFloat(), -padding.toFloat(),
+                view.width + padding.toFloat(), view.height + padding.toFloat())) {
+            discardSourceBlur()
+            return false
+        }
+        sourceCaptureBounds.roundOut(sourceCaptureRect)
+        if (sourceCaptureRect.isEmpty) {
+            discardSourceBlur()
+            return false
+        }
+        sourceOffsetX = -sourceCaptureRect.left
+        sourceOffsetY = -sourceCaptureRect.top
+        blurNode.setPosition(sourceCaptureRect.left, sourceCaptureRect.top,
+            sourceCaptureRect.right, sourceCaptureRect.bottom)
+        val recordingCanvas = blurNode.beginRecording(sourceCaptureRect.width(), sourceCaptureRect.height())
         val save = recordingCanvas.save()
-        transformMatrix.reset()
-        source.transformMatrixToGlobal(transformMatrix)
-        view.transformMatrixToLocal(transformMatrix)
+        recordingCanvas.translate(sourceOffsetX.toFloat(), sourceOffsetY.toFloat())
         recordingCanvas.concat(transformMatrix)
         val recorded = drawSource(recordingCanvas, source)
         recordingCanvas.restoreToCount(save)
         blurNode.endRecording()
         sourceBlurRecorded = recorded
         sourceBlurDirty = !recorded
-        recordedSourceState = nextRecord
         if (!recorded) {
             blurNode.discardDisplayList()
         }
@@ -476,31 +543,10 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         return width.toLong() * height.toLong()
     }
 
-    private fun sourceGeometry(source: View): SourceGeometry {
-        sourceBounds.set(0f, 0f, source.width.toFloat(), source.height.toFloat())
+    private fun updateSourceTransform(source: View) {
         transformMatrix.reset()
         source.transformMatrixToGlobal(transformMatrix)
         view.transformMatrixToLocal(transformMatrix)
-        transformMatrix.mapRect(sourceBounds)
-        return SourceGeometry(
-            left = sourceBounds.left,
-            top = sourceBounds.top,
-            right = sourceBounds.right,
-            bottom = sourceBounds.bottom,
-        )
-    }
-
-    private fun sourceRecordFor(source: View): SourceRecord {
-        return SourceRecord(
-            viewWidth = view.width,
-            viewHeight = view.height,
-            sourceWidth = source.width,
-            sourceHeight = source.height,
-            sourceScrollX = source.scrollX,
-            sourceScrollY = source.scrollY,
-            sourceChildCount = sourceChildCount(source),
-            geometry = sourceGeometry(source),
-        )
     }
 
     private fun sourceChildCount(source: View): Int {
@@ -509,9 +555,14 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
 
     private fun discardSourceBlur() {
         blurNode.discardDisplayList()
+        blurNode.setRenderEffect(null)
+        advancedBlurEffect = null
+        advancedBlurPreset = null
+        sourceOffsetX = 0
+        sourceOffsetY = 0
         sourceBlurRecorded = false
         sourceBlurDirty = true
-        recordedSourceState = SourceRecord()
+        recordedSourceState.reset()
     }
 
     private fun drawSource(canvas: Canvas, source: View): Boolean {
@@ -588,7 +639,17 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         canvas.restoreToCount(save)
     }
 
-    private fun resolveBlurEffect(): AndroidRenderEffect {
+    private fun resolveBlurEffect(): AndroidRenderEffect? {
+        if (advancedBlurEnabled) {
+            val material = advancedBlurEffect ?: AxAdvancedBlurEffect(view.context).also {
+                advancedBlurEffect = it
+            }
+            return material.resolve(
+                AxAdvancedBlur.radiusPx(view.context), sourceOffsetX.toFloat(), sourceOffsetY.toFloat(),
+                sourceOffsetX + view.width.toFloat(), sourceOffsetY + view.height.toFloat(),
+                cornerRadiusPx,
+            )
+        }
         val cached = blurEffect
         if (cached != null && blurEffectRadius == blurRadiusPx) {
             return cached
@@ -633,7 +694,8 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     private fun updatePreDrawObserver() {
-        if (invalidateOnPreDraw && view.isAttachedToWindow) {
+        if (invalidateOnPreDraw && enabled && settingsEnabled && visibilityAggregated
+            && view.isAttachedToWindow) {
             addPreDrawObserver()
         } else {
             removePreDrawObserver()
@@ -641,7 +703,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     private fun updateSourceObserver() {
-        if (!view.isAttachedToWindow) {
+        if (!enabled || !settingsEnabled || !visibilityAggregated || !view.isAttachedToWindow) {
             removeSourceObserver()
             return
         }
@@ -676,23 +738,48 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         }
     }
 
-    private data class SourceRecord(
-        val viewWidth: Int = -1,
-        val viewHeight: Int = -1,
-        val sourceWidth: Int = -1,
-        val sourceHeight: Int = -1,
-        val sourceScrollX: Int = Int.MIN_VALUE,
-        val sourceScrollY: Int = Int.MIN_VALUE,
-        val sourceChildCount: Int = -1,
-        val geometry: SourceGeometry = SourceGeometry(),
-    )
+    private inner class SourceRecord {
+        private var viewWidth = -1
+        private var viewHeight = -1
+        private var sourceWidth = -1
+        private var sourceHeight = -1
+        private var scrollX = Int.MIN_VALUE
+        private var scrollY = Int.MIN_VALUE
+        private var childCount = -1
+        private val transform = Matrix()
 
-    private data class SourceGeometry(
-        val left: Float = Float.NaN,
-        val top: Float = Float.NaN,
-        val right: Float = Float.NaN,
-        val bottom: Float = Float.NaN,
-    )
+        fun matches(source: View): Boolean {
+            if (viewWidth != view.width || viewHeight != view.height
+                || sourceWidth != source.width || sourceHeight != source.height
+                || scrollX != source.scrollX || scrollY != source.scrollY
+                || childCount != sourceChildCount(source)) return false
+            updateSourceTransform(source)
+            return transform == transformMatrix
+        }
+
+        fun update(source: View) {
+            viewWidth = view.width
+            viewHeight = view.height
+            sourceWidth = source.width
+            sourceHeight = source.height
+            scrollX = source.scrollX
+            scrollY = source.scrollY
+            childCount = sourceChildCount(source)
+            updateSourceTransform(source)
+            transform.set(transformMatrix)
+        }
+
+        fun reset() {
+            viewWidth = -1
+            viewHeight = -1
+            sourceWidth = -1
+            sourceHeight = -1
+            scrollX = Int.MIN_VALUE
+            scrollY = Int.MIN_VALUE
+            childCount = -1
+            transform.reset()
+        }
+    }
 }
 
 open class AxBackdropBlurLayout @JvmOverloads constructor(

@@ -37,6 +37,9 @@ class AxBlurSettings @JvmOverloads constructor(
     val blurRadiusPx: Float
         get() = interactor.settings().blurRadiusPx
 
+    val advancedBlurEnabled: Boolean
+        get() = interactor.settings().advancedBlurEnabled
+
     fun start(onSettingsChanged: Runnable) {
         stop()
         subscription = interactor.createSubscription {
@@ -52,6 +55,11 @@ class AxBlurSettings @JvmOverloads constructor(
     }
 
     companion object {
+        @JvmStatic
+        fun qs(context: Context): AxBlurSettings {
+            return AxBlurSettings(context, AxBackdropBlurSettingsSpec.qs())
+        }
+
         @JvmStatic
         fun launcher(context: Context): AxBlurSettings {
             return AxBlurSettings(context, AxBackdropBlurSettingsSpec.launcher())

@@ -1,0 +1,159 @@
+uniform shader content;
+uniform float4 bounds;
+uniform float4 cornerRadii;
+uniform float density;
+const float quality = 1.0;
+const half4 chrome = half4(0.0);
+
+const float bevel = 14.0;
+const float depth = 20.0;
+const float falloff = 2.0;
+const float dispersion = 0.0;
+const float zoom = 1.0;
+const float saturation = 1.1;
+const float veil = 0.5;
+const float highlight = 1.0;
+const float rimFloor = 0.6;
+const float rimWidth = 1.5;
+const float rimVivid = 0.9;
+const float lightX = -0.70710678;
+const float lightY = -0.70710678;
+uniform float dark;
+const float tintAlpha = 0.0;
+const float dimming = 0.0;
+const float frosted = 0.0;
+
+float rectangleDistance(float2 p, float2 halfSize) {
+    float2 q = abs(p) - halfSize;
+    return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+float2 rectangleNormal(float2 p, float2 halfSize) {
+    float2 q = abs(p) - halfSize;
+    float2 s = float2(p.x < 0.0 ? -1.0 : 1.0, p.y < 0.0 ? -1.0 : 1.0);
+    if (q.x > 0.0 && q.y > 0.0) return normalize(q) * s;
+    return q.x > q.y ? float2(s.x, 0.0) : float2(0.0, s.y);
+}
+
+half4 main(float2 coord) {
+    float2 extent = bounds.zw - bounds.xy;
+    if (extent.x <= 0.0 || extent.y <= 0.0) return half4(0.0);
+    float2 c = (bounds.xy + bounds.zw) * 0.5;
+    float2 halfSize = extent * 0.5;
+    float2 p = coord - c;
+    float2 local = coord - bounds.xy;
+    float4 radii = max(cornerRadii, float4(0.0));
+    float scale = min(1.0, min(
+        extent.x / max(max(radii.x + radii.y, radii.w + radii.z), 0.00001),
+        extent.y / max(max(radii.x + radii.w, radii.y + radii.z), 0.00001)));
+    radii *= scale;
+
+    float sd = rectangleDistance(p, halfSize);
+    float2 cornerCenter = float2(0.0);
+    bool roundedEdge = false;
+    if (radii.x > 0.0 && local.x < radii.x && local.y < radii.x) {
+        float2 center = bounds.xy + float2(radii.x);
+        float distance = length(coord - center) - radii.x;
+        if (distance > sd) { sd = distance; cornerCenter = center; roundedEdge = true; }
+    }
+    if (radii.y > 0.0 && local.x > extent.x - radii.y && local.y < radii.y) {
+        float2 center = float2(bounds.z - radii.y, bounds.y + radii.y);
+        float distance = length(coord - center) - radii.y;
+        if (distance > sd) { sd = distance; cornerCenter = center; roundedEdge = true; }
+    }
+    if (radii.z > 0.0 && local.x > extent.x - radii.z && local.y > extent.y - radii.z) {
+        float2 center = bounds.zw - float2(radii.z);
+        float distance = length(coord - center) - radii.z;
+        if (distance > sd) { sd = distance; cornerCenter = center; roundedEdge = true; }
+    }
+    if (radii.w > 0.0 && local.x < radii.w && local.y > extent.y - radii.w) {
+        float2 center = float2(bounds.x + radii.w, bounds.w - radii.w);
+        float distance = length(coord - center) - radii.w;
+        if (distance > sd) { sd = distance; cornerCenter = center; roundedEdge = true; }
+    }
+    float cover = 1.0 - smoothstep(-0.75, 0.75, sd);
+    if (cover <= 0.0) return half4(0.0);
+
+    float inset = max(-sd, 0.0);
+    float bevelPx = max(bevel * density, 1.0);
+    float rimStart = 0.5 * density;
+    float rimEnd = max((0.5 + rimWidth) * density, rimStart + 0.00001);
+    float slope = 1.0 - clamp(inset / bevelPx, 0.0, 1.0);
+    float frost = clamp(frosted, 0.0, 1.0);
+    float2 shift = float2(0.0);
+    float edge = 0.0;
+    if (inset < max(bevelPx, rimEnd)) {
+        float2 delta = coord - cornerCenter;
+        float2 dir = roundedEdge ? delta / max(length(delta), 0.00001)
+                                 : rectangleNormal(p, halfSize);
+        if (slope > 0.0 && frost < 1.0) {
+            float bend = falloff == 2.0 ? slope * slope
+                : falloff == 3.0 ? slope * slope * slope
+                : pow(slope, max(falloff, 0.00001));
+            shift = -dir * depth * density * bend * (1.0 - frost);
+        }
+        if (highlight > 0.0 && inset < rimEnd) {
+            float2 light = float2(lightX, lightY);
+            light /= max(length(light), 0.00001);
+            float facing = dot(dir, light);
+            float rim = 1.0 - smoothstep(rimStart, rimEnd, inset);
+            edge = rim * (rimFloor + (1.0 - rimFloor) * abs(facing)) * highlight;
+        }
+    }
+
+    float2 lo = min(bounds.xy + float2(0.5), c);
+    float2 hi = max(bounds.zw - float2(0.5), c);
+    half4 backdrop = content.eval(clamp(c + (p + shift) * zoom, lo, hi));
+    float3 color = float3(backdrop.rgb) / max(float(backdrop.a), 0.00001);
+    if (quality >= 0.5 && dispersion != 0.0 && slope > 0.0 && frost < 0.5) {
+        float fringe = 2.0 * dispersion;
+        half4 red = content.eval(clamp(c + (p + shift * (1.0 - fringe)) * zoom, lo, hi));
+        half4 blue = content.eval(clamp(c + (p + shift * (1.0 + fringe)) * zoom, lo, hi));
+        color.r = float(red.r) / max(float(red.a), 0.00001);
+        color.b = float(blue.b) / max(float(blue.a), 0.00001);
+    }
+
+    float3 weights = float3(0.2126, 0.7152, 0.0722);
+    if (saturation != 1.0) {
+        color = max(mix(float3(dot(color, weights)), color, saturation), 0.0);
+    }
+    float luma = min(dot(color, weights), 1.0);
+    float3 pale = color * (1.0 + veil);
+    float3 deep = pale;
+    if (veil >= 0.0) {
+        if (dark < 1.0) {
+            pale = mix(color, float3(luma), 0.58 * veil) + veil * (1.32 - 1.34 * luma);
+        }
+        if (dark > 0.0) {
+            float t = 1.0 - luma;
+            float t2 = t * t;
+            float t4 = t2 * t2;
+            float t8 = t4 * t4;
+            float lift = 0.19 * t8 * t8;
+            float k = max(luma - 0.33, 0.0);
+            float shade = k * sqrt(k);
+            float3 vivid = max(mix(float3(luma), color, 1.0 + 0.18 * veil), 0.0);
+            deep = max(vivid * (1.0 + 0.08 * veil) + veil * (lift - shade), 0.0);
+        }
+    }
+    if (edge > 0.0) {
+        if (dark < 1.0) {
+            float3 seen = min(pale, 1.0);
+            float lit = clamp(dot(seen, weights), 0.02, 1.0);
+            float3 vivid = max(mix(float3(lit), seen, 1.0 + 0.2 * edge), 0.0);
+            pale += vivid * (1.0 + 0.91 * edge * (1.0 - lit) / lit) - seen;
+        }
+        if (dark > 0.0) {
+            float3 seen = min(deep, 1.0);
+            float lit = clamp(dot(seen, weights), 0.02, 1.0);
+            float3 vivid = max(mix(float3(lit), seen, 1.0 + rimVivid * edge), 0.0);
+            deep += max(vivid * (1.0 + edge * (0.35 + 0.12 / lit)) - seen, 0.0);
+        }
+    }
+    color = mix(pale, deep, dark);
+    if (tintAlpha > 0.0) color = mix(color, float3(chrome.rgb), tintAlpha);
+    if (dimming > 0.0) color *= 1.0 - dimming;
+    color = clamp(color, 0.0, 1.0);
+    cover *= float(backdrop.a);
+    return half4(half3(color * cover), half(cover));
+}

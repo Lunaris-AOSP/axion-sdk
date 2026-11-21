@@ -22,6 +22,7 @@ import android.view.ViewTreeObserver
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -62,6 +63,8 @@ import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.observeReads
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import com.android.internal.graphics.AdvancedBlurConfig
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.colorResource
@@ -76,6 +79,31 @@ import com.android.axion.kotlin.settings.SettingsType
 import kotlin.math.roundToInt
 
 val LocalAxBlurEnabled = staticCompositionLocalOf { true }
+
+@Composable
+fun rememberAxAdvancedBlurEnabled(
+    settingsSpec: AxBackdropBlurSettingsSpec = AxBackdropBlurSettingsSpec.system(),
+): Boolean {
+    val context = LocalContext.current
+    val settings = remember(context, settingsSpec) { AxBlurSettings(context, settingsSpec) }
+    fun state() = settings.advancedBlurEnabled to AdvancedBlurConfig.current(context)
+    var status by remember(settings) { mutableStateOf(state()) }
+    DisposableEffect(settings) {
+        settings.start(Runnable { status = state() })
+        status = state()
+        onDispose { settings.stop() }
+    }
+    return LocalAxBlurEnabled.current && status.first
+}
+
+@Composable
+@ReadOnlyComposable
+fun axAdvancedBlurContentColor(): Color {
+    LocalConfiguration.current
+    val context = LocalContext.current
+    return Color(AdvancedBlurConfig.current(context)?.contentColor(context)
+        ?: context.getColor(com.android.internal.R.color.materialColorOnSurface))
+}
 
 object AxBlurSurfaceDefaults {
     @Composable
@@ -142,7 +170,7 @@ fun rememberAxBlurEnabled(
         )
         value
     }
-    return !globalDisabled && settingEnabled
+    return !AxBlurProperties.disableBlur && !globalDisabled && settingEnabled
 }
 
 @Composable
@@ -183,6 +211,18 @@ fun Modifier.axBlurBackground(
     cornerRadius: Dp = Dp.Unspecified,
     settingsSpec: AxBackdropBlurSettingsSpec = AxBackdropBlurSettingsSpec.system(),
     shape: Shape? = null,
+): Modifier = axBlurBackground(enabled, fallbackColor, tintColor, cornerRadius, settingsSpec,
+    shape, backdrop = false)
+
+@Composable
+fun Modifier.axBlurBackground(
+    enabled: Boolean,
+    fallbackColor: Color,
+    tintColor: Color,
+    cornerRadius: Dp = Dp.Unspecified,
+    settingsSpec: AxBackdropBlurSettingsSpec = AxBackdropBlurSettingsSpec.system(),
+    shape: Shape? = null,
+    backdrop: Boolean,
 ): Modifier {
     val density = LocalDensity.current
     val view = LocalView.current
@@ -190,6 +230,7 @@ fun Modifier.axBlurBackground(
     val blur = remember(view, settingsSpec) {
         AxViewBackdropBlur(view).apply {
             useSettings(settingsSpec)
+            setBackdropMaterial(backdrop)
             setEnabled(blurEnabled)
         }
     }
@@ -212,10 +253,11 @@ fun Modifier.axBlurBackground(
     }
 
     SideEffect {
+        blur.setBackdropMaterial(backdrop)
         blur.setEnabled(blurEnabled)
     }
 
-    val trackedModifier = axBlurFrameTracking(blurEnabled)
+    val trackedModifier = axBlurFrameTracking(blurEnabled, blur)
         .onGloballyPositioned { sourceCoordinates = it }
     return trackedModifier.drawWithContent {
         val width = size.width.roundToInt()
@@ -275,11 +317,12 @@ fun Modifier.axBlurBackground(
             false
         }
         if (!drewBlur) {
+            val resolvedFallbackColor = Color(blur.resolveFallbackColor(fallbackColor.toArgb()))
             if (outline != null) {
-                drawOutline(outline, color = fallbackColor)
+                drawOutline(outline, color = resolvedFallbackColor)
             } else {
                 drawRoundRect(
-                    color = fallbackColor,
+                    color = resolvedFallbackColor,
                     cornerRadius = CornerRadius(cornerRadiusPx),
                 )
             }
@@ -288,16 +331,17 @@ fun Modifier.axBlurBackground(
     }
 }
 
-private fun Modifier.axBlurFrameTracking(enabled: Boolean): Modifier =
-    this then AxBlurFrameTrackingElement(enabled)
+private fun Modifier.axBlurFrameTracking(enabled: Boolean, blur: AxViewBackdropBlur): Modifier =
+    this then AxBlurFrameTrackingElement(enabled, blur)
 
 private data class AxBlurFrameTrackingElement(
     val enabled: Boolean,
+    val blur: AxViewBackdropBlur,
 ) : ModifierNodeElement<AxBlurFrameTrackingNode>() {
-    override fun create() = AxBlurFrameTrackingNode(enabled)
+    override fun create() = AxBlurFrameTrackingNode(enabled, blur)
 
     override fun update(node: AxBlurFrameTrackingNode) {
-        node.update(enabled)
+        node.update(enabled, blur)
     }
 
     override fun InspectorInfo.inspectableProperties() {
@@ -308,6 +352,7 @@ private data class AxBlurFrameTrackingElement(
 
 private class AxBlurFrameTrackingNode(
     private var enabled: Boolean,
+    private var blur: AxViewBackdropBlur,
 ) : Modifier.Node(),
     CompositionLocalConsumerModifierNode,
     DrawModifierNode,
@@ -316,47 +361,46 @@ private class AxBlurFrameTrackingNode(
     ObserverModifierNode {
 
     private var lastCoordinates: LayoutCoordinates? = null
-    private var geometry = AxBlurFrameGeometry()
+    private var lastPosition = Offset.Unspecified
+    private var lastSize = Size.Unspecified
+    private var lastWindowId: Any? = null
     private var hostView: View? = null
     private var observingPreDraw = false
-    private var skipNextHostDirty = false
+    private val drawInvalidation: () -> Unit = {
+        if (isAttached && enabled) invalidateDraw()
+    }
     private val preDrawListener = ViewTreeObserver.OnPreDrawListener {
         if (isAttached && enabled) {
-            val viewDirty = hostView?.isDirty == true
             lastCoordinates?.let { updateCoordinates(it) }
-            if (viewDirty) {
-                if (skipNextHostDirty) {
-                    skipNextHostDirty = false
-                } else {
-                    skipNextHostDirty = true
-                    invalidateDraw()
-                }
-            } else {
-                skipNextHostDirty = false
-            }
         }
         true
     }
 
     override val shouldAutoInvalidate = false
 
-    fun update(enabled: Boolean) {
-        if (this.enabled == enabled) return
+    fun update(enabled: Boolean, blur: AxViewBackdropBlur) {
+        if (this.enabled == enabled && this.blur === blur) return
+        if (this.blur.onInvalidate === drawInvalidation) this.blur.onInvalidate = null
+        this.blur = blur
         this.enabled = enabled
+        if (isAttached) blur.onInvalidate = drawInvalidation
         updatePreDrawObserver()
         invalidateDraw()
     }
 
     override fun onAttach() {
+        blur.onInvalidate = drawInvalidation
         onObservedReadsChanged()
     }
 
     override fun onDetach() {
+        if (blur.onInvalidate === drawInvalidation) blur.onInvalidate = null
         removePreDrawObserver()
         hostView = null
         lastCoordinates = null
-        geometry = AxBlurFrameGeometry()
-        skipNextHostDirty = false
+        lastPosition = Offset.Unspecified
+        lastSize = Size.Unspecified
+        lastWindowId = null
     }
 
     override fun onObservedReadsChanged() {
@@ -372,9 +416,8 @@ private class AxBlurFrameTrackingNode(
 
     override fun onRemeasured(size: IntSize) {
         val newSize = size.toSize()
-        val nextGeometry = geometry.copy(size = newSize)
-        if (geometry != nextGeometry) {
-            geometry = nextGeometry
+        if (lastSize != newSize) {
+            lastSize = newSize
             invalidateDraw()
         }
     }
@@ -393,13 +436,10 @@ private class AxBlurFrameTrackingNode(
         val newPosition = bounds.topLeft
         val newSize = bounds.size
         val newWindowId = currentWindowId()
-        val nextGeometry = AxBlurFrameGeometry(
-            position = newPosition,
-            size = newSize,
-            windowId = newWindowId,
-        )
-        if (geometry != nextGeometry) {
-            geometry = nextGeometry
+        if (lastPosition != newPosition || lastSize != newSize || lastWindowId != newWindowId) {
+            lastPosition = newPosition
+            lastSize = newSize
+            lastWindowId = newWindowId
             invalidateDraw()
         }
     }
@@ -408,18 +448,11 @@ private class AxBlurFrameTrackingNode(
         return hostView?.windowId ?: currentValueOf(LocalView).windowId
     }
 
-    private data class AxBlurFrameGeometry(
-        val position: Offset = Offset.Unspecified,
-        val size: Size = Size.Unspecified,
-        val windowId: Any? = null,
-    )
-
     private fun updatePreDrawObserver() {
         val view = if (isAttached && enabled) currentValueOf(LocalView) else null
         if (hostView !== view) {
             removePreDrawObserver()
             hostView = view
-            skipNextHostDirty = false
         }
         if (view != null && !observingPreDraw) {
             view.viewTreeObserver.addOnPreDrawListener(preDrawListener)

@@ -20,6 +20,7 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
+import android.provider.Settings
 import android.view.View
 
 object AxBlurColors {
@@ -28,6 +29,9 @@ object AxBlurColors {
         return surfaceEffect0(context)
     }
 
+    /** Rendering callers already gate material availability through their settings observer. */
+    internal fun materialTint(context: Context): Int = color(context, R.color.ax_blur_surface_effect_0)
+
     @JvmStatic
     fun fallback(context: Context): Int {
         return color(context, R.color.ax_blur_fallback)
@@ -35,7 +39,7 @@ object AxBlurColors {
 
     @JvmStatic
     fun surfaceEffect(context: Context, level: Int): Int {
-        if (isBlurDisabled) return surfaceContainer(context)
+        if (isBlurDisabled(context)) return surfaceContainer(context)
         return color(context, surfaceEffectResource(level))
     }
 
@@ -66,19 +70,19 @@ object AxBlurColors {
 
     @JvmStatic
     fun surfaceBrightTint(context: Context): Int {
-        if (isBlurDisabled) return surfaceBright(context)
+        if (isBlurDisabled(context)) return surfaceBright(context)
         return color(context, R.color.ax_blur_surface_bright_expressive_tint)
     }
 
     @JvmStatic
     fun surfaceLightTint(context: Context): Int {
-        if (isBlurDisabled) return surfaceBright(context)
+        if (isBlurDisabled(context)) return surfaceBright(context)
         return color(context, R.color.ax_blur_surface_light_expressive_tint)
     }
 
     @JvmStatic
     fun surfaceBrightTintList(context: Context): ColorStateList {
-        if (isBlurDisabled) return ColorStateList.valueOf(surfaceBright(context))
+        if (isBlurDisabled(context)) return ColorStateList.valueOf(surfaceBright(context))
         return colorStateList(context, R.color.ax_blur_surface_bright_expressive_tint)
     }
 
@@ -89,13 +93,13 @@ object AxBlurColors {
 
     @JvmStatic
     fun surfaceContainerTint(context: Context): Int {
-        if (isBlurDisabled) return surfaceContainer(context)
+        if (isBlurDisabled(context)) return surfaceContainer(context)
         return color(context, R.color.ax_blur_surface_container_expressive_tint)
     }
 
     @JvmStatic
     fun surfaceContainerTintList(context: Context): ColorStateList {
-        if (isBlurDisabled) return ColorStateList.valueOf(surfaceContainer(context))
+        if (isBlurDisabled(context)) return ColorStateList.valueOf(surfaceContainer(context))
         return colorStateList(context, R.color.ax_blur_surface_container_expressive_tint)
     }
 
@@ -129,8 +133,10 @@ object AxBlurColors {
         }
     }
 
-    private val isBlurDisabled: Boolean
-        get() = AxBlurProperties.disableBlur || !AxBlurProperties.defaultGlobalBlurEnabled
+    private fun isBlurDisabled(context: Context): Boolean =
+        AxBlurProperties.disableBlur || !AxBlurSupport.supportsCrossWindowBlur() ||
+            Settings.Global.getInt(context.contentResolver, Settings.Global.DISABLE_WINDOW_BLURS,
+                if (AxBlurProperties.defaultGlobalBlurEnabled) 0 else 1) != 0
 
     private fun surfaceEffectResource(level: Int): Int {
         return when (level) {

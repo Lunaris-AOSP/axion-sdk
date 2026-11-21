@@ -25,7 +25,14 @@ data class AxBackdropBlurSettingsSpec internal constructor(
     internal val defaultRadiusPx: Float?,
     internal val maxRadiusPx: Float?,
     internal val enabledSettingsType: SettingsType = SettingsType.SECURE,
+    internal val advancedBlurTarget: AdvancedBlurTarget = AdvancedBlurTarget.SYSTEM,
 ) {
+    enum class AdvancedBlurTarget {
+        SYSTEM,
+        QS,
+        LAUNCHER,
+    }
+
     companion object {
         private const val KEY_SYSTEM_BLUR_RADIUS = "system_blur_radius"
         private const val KEY_LAUNCHER_BLUR_ENABLED = "pulse_launcher_blur_enabled"
@@ -44,6 +51,13 @@ data class AxBackdropBlurSettingsSpec internal constructor(
             enabledKey = Settings.System.DIALOG_BLUR_ENABLED,
             enabledSettingsType = SettingsType.SYSTEM,
         )
+
+        private val QS = SYSTEM.copy(advancedBlurTarget = AdvancedBlurTarget.QS)
+
+        @JvmStatic
+        fun qs(): AxBackdropBlurSettingsSpec {
+            return QS
+        }
 
         @JvmStatic
         fun dialog(): AxBackdropBlurSettingsSpec {
@@ -67,7 +81,7 @@ data class AxBackdropBlurSettingsSpec internal constructor(
                 defaultEnabled = false,
                 defaultRadiusPx = defaultRadiusPx,
                 maxRadiusPx = maxRadiusPx,
-            )
+            ).copy(advancedBlurTarget = AdvancedBlurTarget.LAUNCHER)
         }
 
         @JvmStatic
