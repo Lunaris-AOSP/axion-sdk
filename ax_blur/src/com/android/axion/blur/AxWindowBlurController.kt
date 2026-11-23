@@ -30,7 +30,9 @@ import android.view.WindowManager
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
 import com.android.axion.blur.model.AxBackdropBlurSettingsModel
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
+import com.android.internal.graphics.drawable.AxBlurCustomization
 import com.android.internal.graphics.drawable.BackgroundBlurDrawable
+import java.util.function.Consumer
 import kotlin.math.roundToInt
 
 class AxWindowBlurController @JvmOverloads constructor(
@@ -51,20 +53,32 @@ class AxWindowBlurController @JvmOverloads constructor(
     private val surfaces = LinkedHashMap<View, SurfaceBlurState>()
     private val pendingPreDrawListeners = ArrayList<PendingPreDraw>()
     private var started = false
+    private val windowManager = this.context.getSystemService(WindowManager::class.java)
+    private val crossWindowBlurListener = Consumer<Boolean> {
+        if (started) apply()
+    }
+    private var observingSurfaceChanges = false
+    private val surfaceChangeListener = ViewTreeObserver.OnPreDrawListener {
+        if (started && surfaces.any { (view, state) -> state.hasExternalBackground(view) }) apply()
+        true
+    }
 
     fun start() {
         if (!started) {
-            settingsObserver.start()
             started = true
+            settingsObserver.start()
+            windowManager?.addCrossWindowBlurEnabledListener(context.mainExecutor, crossWindowBlurListener)
         }
         apply()
     }
 
     fun stop() {
         if (started) {
-            settingsObserver.stop()
             started = false
+            settingsObserver.stop()
+            windowManager?.removeCrossWindowBlurEnabledListener(crossWindowBlurListener)
         }
+        updateSurfaceChangeObserver(false)
         clearPendingPreDrawListeners()
         clearWindowBlur()
         restoreSurfaces()
@@ -101,22 +115,40 @@ class AxWindowBlurController @JvmOverloads constructor(
     }
 
     private fun apply(settings: AxBackdropBlurSettingsModel) {
-        val radius = settings.blurRadiusPx.roundToInt()
-        val supportedRadius = if (AxBlurSupport.supportsCrossWindowBlur() && !AxBlurProperties.disableBlur) {
+        val radius = if (settings.enabled) {
+            settings.customization.resolveRadius(context, settings.blurRadiusPx).roundToInt()
+        } else {
+            0
+        }
+        val blurSupported = AxBlurSupport.supportsCrossWindowBlur() && !AxBlurProperties.disableBlur
+        val supportedRadius = if (blurSupported) {
             radius
         } else {
             0
         }
+        updateSurfaceChangeObserver(started && settings.customization.tintEnabled && surfaces.isNotEmpty())
         val alpha = if (supportedRadius > 0) surfaceAlpha.sanitizedAlpha() else 255
-        applyWindowBlur(supportedRadius)
-        applySurfaceBlur(supportedRadius, alpha)
+        applyWindowBlur(supportedRadius, settings.customization.radiusEnabled)
+        applySurfaceBlur(
+            supportedRadius, alpha,
+            settings.customization.takeIf { settings.enabled && blurSupported },
+        )
     }
 
-    private fun applyWindowBlur(radius: Int) {
+    private fun updateSurfaceChangeObserver(observe: Boolean) {
+        if (observingSurfaceChanges == observe) return
+        observingSurfaceChanges = observe
+        val observer = window.decorView.viewTreeObserver
+        if (!observer.isAlive) return
+        if (observe) observer.addOnPreDrawListener(surfaceChangeListener)
+        else observer.removeOnPreDrawListener(surfaceChangeListener)
+    }
+
+    private fun applyWindowBlur(radius: Int, overrideRadius: Boolean = false) {
         val backgroundRadius = if (blurBehind) radius.coerceAtLeast(0) else 0
         setWindowBackgroundBlurRadius(backgroundRadius)
         val behindRadius =
-            (backgroundRadius * blurBehindRadiusScale).roundToInt().coerceAtLeast(0)
+            (backgroundRadius * if (overrideRadius) 1f else blurBehindRadiusScale).roundToInt().coerceAtLeast(0)
         val attrs = window.attributes
         val flags = if (backgroundRadius > 0) {
             attrs.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
@@ -140,9 +172,9 @@ class AxWindowBlurController @JvmOverloads constructor(
         }
     }
 
-    private fun applySurfaceBlur(radius: Int, alpha: Int) {
+    private fun applySurfaceBlur(radius: Int, alpha: Int, customization: AxBlurCustomization.State?) {
         surfaces.forEach { (view, state) ->
-            state.apply(view, context, radius, alpha)
+            state.apply(view, context, radius, alpha, customization)
         }
     }
 
@@ -182,18 +214,41 @@ class AxWindowBlurController @JvmOverloads constructor(
         private var layerDrawable: LayerDrawable? = null
         private var surfaceBackground: Drawable? = originalBackground?.mutate()
         private val outline = Outline()
+        private var tintOverridden = false
+        private var originalBlurAlpha = 255
+        private var originalBlurRadius = 0
+        private var originalUseDrawableAlphaForTint = false
 
-        fun apply(view: View, context: Context, radius: Int, alpha: Int) {
+        fun apply(
+            view: View, context: Context, radius: Int, alpha: Int,
+            customization: AxBlurCustomization.State?,
+        ) {
             captureExternalBackground(view)
-            if (radius <= 0) {
+            val overrideTint = customization?.tintEnabled == true
+            if (radius <= 0 && !overrideTint) {
                 restore(view)
+                (surfaceBackground as? BackgroundBlurDrawable)?.setBlurRadius(0)
                 return
             }
             val existingBlur = surfaceBackground as? BackgroundBlurDrawable
             if (existingBlur != null) {
+                if (!tintOverridden && overrideTint) {
+                    originalBlurAlpha = existingBlur.alpha
+                    originalBlurRadius = existingBlur.blurRadius
+                    originalUseDrawableAlphaForTint = existingBlur.isUsingDrawableAlphaForTint
+                }
+                existingBlur.setTintOverride(
+                    overrideTint,
+                    if (overrideTint) customization!!.resolveTint(context, existingBlur.originalColor) else 0,
+                )
+                existingBlur.setUseDrawableAlphaForTint(
+                    if (overrideTint) true else if (tintOverridden) originalUseDrawableAlphaForTint
+                    else existingBlur.isUsingDrawableAlphaForTint,
+                )
+                tintOverridden = overrideTint
                 existingBlur.setVisible(true, false)
                 existingBlur.setBlurRadius(radius)
-                existingBlur.setAlpha(255)
+                if (!overrideTint) existingBlur.setAlpha(255)
                 view.background = existingBlur
                 return
             }
@@ -204,18 +259,18 @@ class AxWindowBlurController @JvmOverloads constructor(
                 return
             }
             blur.setVisible(true, false)
-            blur.setAlpha(255)
+            if (!overrideTint || view.background !== blur) blur.setAlpha(255)
             blur.setBlurRadius(radius)
-            blur.setColor(
-                if (surfaceBackground == null) {
-                    AxBlurColors.tint(context)
-                } else {
-                    Color.TRANSPARENT
-                },
+            blur.setUseDrawableAlphaForTint(overrideTint)
+            blur.setColor(if (surfaceBackground == null) AxBlurColors.tint(context) else Color.TRANSPARENT)
+            blur.setTintOverride(
+                overrideTint,
+                if (overrideTint) customization!!.resolveTint(context, Color.TRANSPARENT) else 0,
             )
             applyCorners(blur)
             val overlay = surfaceBackground
-            if (overlay == null) {
+            if (overlay == null || overrideTint) {
+                surfaceBackground.applyAlpha(originalAlpha)
                 view.background = blur
             } else {
                 overlay.applyAlpha(alpha)
@@ -228,11 +283,26 @@ class AxWindowBlurController @JvmOverloads constructor(
         fun restore(view: View) {
             blurDrawable?.setVisible(false, false)
             blurDrawable?.setBlurRadius(0)
+            blurDrawable?.setTintOverride(false, 0)
+            if (tintOverridden) {
+                (surfaceBackground as? BackgroundBlurDrawable)?.let {
+                    it.setTintOverride(false, 0)
+                    it.setAlpha(originalBlurAlpha)
+                    it.setBlurRadius(originalBlurRadius)
+                    it.setUseDrawableAlphaForTint(originalUseDrawableAlphaForTint)
+                }
+                tintOverridden = false
+            }
             surfaceBackground.applyAlpha(originalAlpha)
             if (view.background === layerDrawable || view.background === blurDrawable) {
                 view.background = surfaceBackground
             }
             layerDrawable = null
+        }
+
+        fun hasExternalBackground(view: View): Boolean {
+            val background = view.background
+            return background !== layerDrawable && background !== blurDrawable && background !== surfaceBackground
         }
 
         private fun captureExternalBackground(view: View) {
@@ -242,6 +312,15 @@ class AxWindowBlurController @JvmOverloads constructor(
                 background !== blurDrawable &&
                 background !== surfaceBackground
             ) {
+                if (tintOverridden) {
+                    (surfaceBackground as? BackgroundBlurDrawable)?.let {
+                        it.setTintOverride(false, 0)
+                        it.setAlpha(originalBlurAlpha)
+                            it.setBlurRadius(originalBlurRadius)
+                        it.setUseDrawableAlphaForTint(originalUseDrawableAlphaForTint)
+                    }
+                    tintOverridden = false
+                }
                 originalBackground = background
                 originalAlpha = background?.alpha ?: 255
                 surfaceBackground = background?.mutate()
@@ -316,13 +395,36 @@ class AxWindowBlurController @JvmOverloads constructor(
             surfaceAlpha: Int = DEFAULT_SURFACE_ALPHA,
         ) {
             if (window == null) return
-            AxWindowBlurController(
-                window,
-                context,
-                blurBehind,
-                blurBehindRadiusScale,
-                surfaceAlpha,
-            ).apply()
+            val decor = window.decorView
+            val existing = decor.getTag(R.id.ax_window_blur_applied_controller) as? AxWindowBlurController
+            val controller = if (existing != null && existing.blurBehind == blurBehind &&
+                existing.blurBehindRadiusScale == blurBehindRadiusScale && existing.surfaceAlpha == surfaceAlpha
+            ) {
+                existing
+            } else {
+                existing?.detach()
+                AxWindowBlurController(
+                    window, context, blurBehind, blurBehindRadiusScale, surfaceAlpha,
+                ).also { controller ->
+                    decor.setTag(R.id.ax_window_blur_applied_controller, controller)
+                    decor.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                        override fun onViewAttachedToWindow(view: View) {
+                            if (view.getTag(R.id.ax_window_blur_applied_controller) === controller) {
+                                controller.start()
+                            }
+                        }
+
+                        override fun onViewDetachedFromWindow(view: View) {
+                            controller.detach()
+                            if (view.getTag(R.id.ax_window_blur_applied_controller) === controller) {
+                                view.setTag(R.id.ax_window_blur_applied_controller, null)
+                            }
+                            view.removeOnAttachStateChangeListener(this)
+                        }
+                    })
+                }
+            }
+            if (decor.isAttachedToWindow) controller.start() else controller.apply()
         }
 
         @JvmStatic

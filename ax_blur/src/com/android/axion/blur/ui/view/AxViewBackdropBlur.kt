@@ -38,6 +38,7 @@ import com.android.axion.blur.AxWindowBlurSource
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 import com.android.axion.blur.model.AxBackdropBlurSettingsSubscription
+import com.android.internal.graphics.drawable.AxBlurCustomization
 import com.android.internal.graphics.drawable.BackgroundBlurDrawable
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -45,6 +46,7 @@ import kotlin.math.roundToInt
 class AxViewBackdropBlur @JvmOverloads constructor(
     private val view: View,
     private val observeSettings: Boolean = true,
+    private val applyGlobalCustomization: Boolean = true,
 ) {
     private val path = Path()
     private val rect = RectF()
@@ -56,6 +58,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     private val scaledCornerRadii = FloatArray(8)
     private val sourceBlurNode = RenderNode("AxViewBackdropBlur")
     private val defaultKey = Any()
+    private val renderNodeAlphaSupported = BackgroundBlurDrawable.supportsRenderNodeAlpha()
     private val drawables = LinkedHashMap<Any, BackgroundBlurDrawable>()
     private val drawableAlphaStates = LinkedHashMap<Any, DrawableAlphaState>()
     private val resolvedDrawableAlphas = LinkedHashMap<Any, Int>()
@@ -72,9 +75,16 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     private var enabled = false
     private var globalBlurEnabled = true
     private var useSettingsBlurRadius = true
+    private val customization = AxBlurCustomization.getInstance(view.context)
+    private var customizationState = customization.state
+    private val customizationListener = Runnable { applyCustomization() }
+    private var observingCustomization = false
+    private var onCustomizationChanged: Runnable? = null
+    private var requestedBlurRadiusPx = 0f
     private var blurRadiusPx = 0f
     private var alpha = 255
     private var overlayColor = Color.TRANSPARENT
+    private var resolvedOverlayColor = Color.TRANSPARENT
     private var sourceView: View? = null
     private var windowSourceView: View? = null
     private var windowSourceRoot: View? = null
@@ -170,14 +180,44 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     }
 
     fun setOverlayColor(color: Int) {
-        if (overlayColor == color) return
         overlayColor = color
+        updateOverlayColor()
+    }
+
+    fun isTintOverrideEnabled(): Boolean {
+        return applyGlobalCustomization && customizationState.tintEnabled
+    }
+
+    fun resolveBlurRadiusPx(radius: Float): Float {
+        return if (applyGlobalCustomization) customizationState.resolveRadius(view.context, radius) else radius
+    }
+
+    fun setOnCustomizationChangedListener(listener: Runnable?) {
+        onCustomizationChanged = listener
+    }
+
+    private fun updateOverlayColor() {
+        val color = if (applyGlobalCustomization) {
+            customizationState.resolveTint(view.context, overlayColor)
+        } else {
+            overlayColor
+        }
+        if (resolvedOverlayColor == color) return
+        resolvedOverlayColor = color
         invalidateHost()
+    }
+
+    private fun applyCustomization() {
+        customizationState = customization.state
+        updateOverlayColor()
+        applyBlurSettings()
+        onCustomizationChanged?.run()
     }
 
     fun setBlurRadiusPx(radius: Float) {
         useSettingsBlurRadius = false
-        updateBlurRadiusPx(radius)
+        requestedBlurRadiusPx = radius
+        updateBlurRadiusPx(resolveBlurRadiusPx(radius))
         updateSettingsObserver()
     }
 
@@ -317,7 +357,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         windowSourceRoot?.let { AxWindowBlurSource.removeListener(it, windowSourceListener) }
         windowSourceRoot = root
         AxWindowBlurSource.addListener(root, windowSourceListener)
-        applyBlurSettings()
+        applyCustomization()
         updateSettingsObserver()
         updatePreDrawObserver()
     }
@@ -328,6 +368,10 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         windowSourceRoot = null
         windowSourceView = null
         stopSettingsObserver()
+        if (observingCustomization) {
+            customization.removeListener(customizationListener)
+            observingCustomization = false
+        }
         sourceView = null
         excludedSourceViews.clear()
         clear()
@@ -535,6 +579,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
             }
         }
         val crossWindowAlpha = resolvedCrossWindowAlpha(alphaState)
+        val tintAlpha = localDrawableAlpha(alphaState)
         if (crossWindowAlpha <= 0) {
             clearKey(key)
             return true
@@ -561,6 +606,8 @@ class AxViewBackdropBlur @JvmOverloads constructor(
             )
         }
         if (preferSourceBlur) {
+            val useCrossWindow = shouldUseCrossWindowBlur()
+            val tintAfterSource = isTintOverrideEnabled() && !useCrossWindow
             val drewCrossWindow = drawCrossWindowBlur(
                 canvas,
                 left,
@@ -572,8 +619,10 @@ class AxViewBackdropBlur @JvmOverloads constructor(
                 crossWindowAlpha,
                 key,
                 clipPath,
+                color = if (tintAfterSource) Color.TRANSPARENT else resolvedOverlayColor,
+                tintAlpha = tintAlpha,
             )
-            if (drewCrossWindow && shouldUseCrossWindowBlur()) {
+            if (drewCrossWindow && useCrossWindow) {
                 if (sourceBlurRecorded) discardSourceBlur()
                 return true
             }
@@ -585,9 +634,9 @@ class AxViewBackdropBlur @JvmOverloads constructor(
                 bottom,
                 cornerRadii,
                 cornerRadius,
-                resolvedDrawableAlpha(alphaState),
+                if (isTintOverrideEnabled()) tintAlpha else resolvedDrawableAlpha(alphaState),
                 clipPath,
-                drawOverlay = !drewCrossWindow,
+                drawOverlay = !drewCrossWindow || tintAfterSource,
             )
             if (!drewCrossWindow) clearKey(key)
             if (!drewSource && requireSourceBlur) {
@@ -596,6 +645,12 @@ class AxViewBackdropBlur @JvmOverloads constructor(
             }
             if (drewSource) return true
             if (drewCrossWindow) {
+                if (tintAfterSource) {
+                    drawCrossWindowBlur(
+                        canvas, left, top, right, bottom, cornerRadii, cornerRadius,
+                        crossWindowAlpha, key, clipPath, tintAlpha = tintAlpha,
+                    )
+                }
                 return true
             }
             return false
@@ -611,6 +666,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
                 crossWindowAlpha,
                 key,
                 clipPath,
+                tintAlpha = tintAlpha,
             )
         ) {
             return true
@@ -624,7 +680,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
             bottom,
             cornerRadii,
             cornerRadius,
-            resolvedDrawableAlpha(alphaState),
+            if (isTintOverrideEnabled()) tintAlpha else resolvedDrawableAlpha(alphaState),
             clipPath,
         )
     }
@@ -640,17 +696,24 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         alpha: Int,
         key: Any,
         clipPath: Path?,
-        color: Int = overlayColor,
+        color: Int = resolvedOverlayColor,
+        tintAlpha: Int = alpha,
     ): Boolean {
         if (!crossWindowBlurEnabled) return false
         if (!AxBlurSupport.supportsCrossWindowBlur()) return false
         val blurDrawable = blurDrawableFor(key) ?: return false
-        blurDrawable.setApplyRenderNodeAlpha(true)
         blurDrawable.setVisible(true, false)
         blurDrawable.setBlurRadius(blurRadiusPx.roundToInt())
         blurDrawable.alpha = alpha
         resolvedDrawableAlphas[key] = alpha
-        blurDrawable.setColor(color)
+        blurDrawable.setColor(
+            if (isTintOverrideEnabled()) {
+                (color and 0x00ffffff) or
+                    ((Color.alpha(color) * tintAlpha / 255f).roundToInt().coerceIn(0, 255) shl 24)
+            } else {
+                color
+            },
+        )
         applyCornerRadius(blurDrawable, cornerRadii, cornerRadius)
         setBoundsIfChanged(blurDrawable, left, top, right, bottom)
         val save = canvas.save()
@@ -912,7 +975,8 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         canvas.restoreToCount(save)
     }
 
-    private fun resolveSourceBlurEffect(): RenderEffect {
+    private fun resolveSourceBlurEffect(): RenderEffect? {
+        if (blurRadiusPx <= 0f) return null
         val cached = sourceBlurEffect
         if (cached != null && sourceBlurEffectRadius == blurRadiusPx) {
             return cached
@@ -967,8 +1031,9 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         bottom: Int,
     ): Boolean {
         return enabled &&
+            (!useSettingsBlurRadius || globalBlurEnabled) &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            blurRadiusPx.roundToInt() > 0 &&
+            (blurRadiusPx.roundToInt() > 0 || isTintOverrideEnabled()) &&
             canvas.isHardwareAccelerated &&
             hasRequiredWindowFocus() &&
             left < right &&
@@ -991,13 +1056,15 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         return (alpha * windowAlpha()).sanitizedAlphaFactor()
     }
 
+    private fun localDrawableAlpha(state: DrawableAlphaState): Int {
+        val alpha = state.alpha.coerceIn(0, 255)
+        val target = state.target ?: return alpha
+        return scaledDrawableAlpha(alpha, targetLocalAlpha(target) ?: return 0)
+    }
+
     private fun resolvedDrawableAlpha(state: DrawableAlphaState): Int {
-        var drawAlpha = state.alpha.coerceIn(0, 255)
+        var drawAlpha = localDrawableAlpha(state)
         if (drawAlpha <= 0) return 0
-        val target = state.target
-        if (target != null) {
-            drawAlpha = scaledDrawableAlpha(drawAlpha, targetLocalAlpha(target) ?: return 0)
-        }
         if (state.applyViewAlpha) {
             drawAlpha = scaledDrawableAlpha(drawAlpha, viewTreeAlpha() ?: return 0)
         }
@@ -1005,6 +1072,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     }
 
     private fun resolvedCrossWindowAlpha(state: DrawableAlphaState): Int {
+        if (!renderNodeAlphaSupported) return resolvedDrawableAlpha(state)
         var drawAlpha = state.alpha.coerceIn(0, 255)
         val target = state.target
         if (target != null) {
@@ -1102,8 +1170,9 @@ class AxViewBackdropBlur @JvmOverloads constructor(
 
     private fun shouldTrackFrames(): Boolean {
         return enabled &&
+            (!useSettingsBlurRadius || globalBlurEnabled) &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            blurRadiusPx.roundToInt() > 0
+            (blurRadiusPx.roundToInt() > 0 || isTintOverrideEnabled())
     }
 
     private fun hasTrackedStateChanged(): Boolean {
@@ -1188,7 +1257,10 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     private fun blurDrawableFor(key: Any): BackgroundBlurDrawable? {
         return drawables[key] ?: view.viewRootImpl
             ?.createBackgroundBlurDrawable()
-            ?.also { drawables[key] = it }
+            ?.also {
+                if (renderNodeAlphaSupported) it.setApplyRenderNodeAlpha(true)
+                drawables[key] = it
+            }
     }
 
     private fun setBoundsIfChanged(
@@ -1264,9 +1336,9 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         clipPath: Path?,
         alpha: Int = 255,
     ) {
-        if (Color.alpha(overlayColor) == 0) return
-        overlayPaint.color = overlayColor
-        overlayPaint.alpha = (Color.alpha(overlayColor) * alpha / 255f)
+        if (Color.alpha(resolvedOverlayColor) == 0) return
+        overlayPaint.color = resolvedOverlayColor
+        overlayPaint.alpha = (Color.alpha(resolvedOverlayColor) * alpha / 255f)
             .roundToInt()
             .coerceIn(0, 255)
         if (clipPath != null) {
@@ -1290,8 +1362,11 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         if (useSettingsBlurRadius) {
             val settings = settingsInteractor.settings()
             globalBlurEnabled = settings.enabled
-            updateBlurRadiusPx(settings.blurRadiusPx)
+            requestedBlurRadiusPx = settings.blurRadiusPx
         }
+        updateBlurRadiusPx(
+            if (useSettingsBlurRadius && !globalBlurEnabled) 0f else resolveBlurRadiusPx(requestedBlurRadiusPx),
+        )
     }
 
     private fun updateBlurRadiusPx(radius: Float) {
@@ -1299,15 +1374,24 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         if (blurRadiusPx == coerced) return
         blurRadiusPx = coerced
         sourceBlurEffect = null
-        discardSourceBlur()
+        if (!sourceBlurSnapshot) discardSourceBlur()
         if (coerced == 0f) {
-            clear()
+            if (sourceBlurSnapshot) clearCrossWindowBlur() else clear()
             return
         }
         invalidateHost()
     }
 
     private fun updateSettingsObserver() {
+        val shouldObserveCustomization = applyGlobalCustomization && attached
+        if (shouldObserveCustomization != observingCustomization) {
+            observingCustomization = shouldObserveCustomization
+            if (shouldObserveCustomization) {
+                customization.addListener(customizationListener)
+            } else {
+                customization.removeListener(customizationListener)
+            }
+        }
         if (observeSettings && attached && enabled && useSettingsBlurRadius) {
             startSettingsObserver()
         } else {
@@ -1322,7 +1406,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     }
 
     private fun startSettingsObserver() {
-        val observer = settingsSubscription ?: settingsInteractor.createSubscription {
+        val observer = settingsSubscription ?: settingsInteractor.createSubscription(observeCustomization = false) {
             applyBlurSettings()
         }.also {
             settingsSubscription = it

@@ -28,6 +28,7 @@ import android.view.View
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 import com.android.axion.blur.ui.view.AxViewBackdropBlur
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 class AxBlurBackgroundRenderer @JvmOverloads constructor(
     private val view: View,
@@ -58,6 +59,10 @@ class AxBlurBackgroundRenderer @JvmOverloads constructor(
 
     fun isCrossWindowBlurActive(): Boolean {
         return blur.isCrossWindowBlurActive()
+    }
+
+    fun isTintOverrideEnabled(): Boolean {
+        return blur.isTintOverrideEnabled()
     }
 
     fun setSettings(settingsSpec: AxBackdropBlurSettingsSpec) {
@@ -175,20 +180,25 @@ class AxBlurBackgroundRenderer @JvmOverloads constructor(
             return false
         }
         val current = background.current
+        val drawAlpha = if (isTintOverrideEnabled()) {
+            (surfaceAlpha * background.alpha / 255f).roundToInt().coerceIn(0, 255)
+        } else {
+            surfaceAlpha
+        }
         blur.setOverlayColor(overlayColor)
         if (current is GradientDrawable) {
             val cornerRadii = current.cornerRadii
             if (cornerRadii != null && cornerRadii.size >= 8) {
                 return withOverlayColor(overlayColor) {
-                    blur.draw(canvas, 0, 0, view.width, view.height, cornerRadii)
+                    blur.draw(canvas, 0, 0, view.width, view.height, cornerRadii, drawAlpha)
                 }
             }
             return withOverlayColor(overlayColor) {
-                blur.draw(canvas, 0, 0, view.width, view.height, cornerRadius(current))
+                blur.draw(canvas, 0, 0, view.width, view.height, cornerRadius(current), drawAlpha)
             }
         }
         return withOverlayColor(overlayColor) {
-            blur.draw(canvas, 0, 0, view.width, view.height, 0f)
+            blur.draw(canvas, 0, 0, view.width, view.height, 0f, drawAlpha)
         }
     }
 

@@ -34,6 +34,7 @@ import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
 import com.android.axion.blur.ui.view.AxViewBackdropBlur
+import com.android.internal.graphics.drawable.AxBlurCustomization
 import kotlin.math.roundToInt
 
 open class AxBackdropBlurSourceLayout @JvmOverloads constructor(
@@ -95,7 +96,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     private val path = Path()
     private val rect = RectF()
     private val childRect = RectF()
-    private val nativeBackdropBlur = AxViewBackdropBlur(view, observeSettings = false).apply {
+    private val nativeBackdropBlur = AxViewBackdropBlur(view, observeSettings = false, applyGlobalCustomization = false).apply {
         setEnabled(true)
     }
     private val transformMatrix = Matrix()
@@ -115,6 +116,11 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     private var sourceBlurRecorded = false
     private var sourceBlurDirty = true
     private var recordedSourceState = SourceRecord()
+    private val customization = AxBlurCustomization.getInstance(view.context)
+    private var customizationState = customization.state
+    private var systemBlurEnabled = true
+    private var resolvedRadiusPx = 0f
+    private var resolvedTintColor = AndroidColor.TRANSPARENT
     private var storedBlurRadiusPx = 0f
     private var storedBackdropTintColor = AndroidColor.TRANSPARENT
     private var storedFallbackColor = AndroidColor.TRANSPARENT
@@ -132,7 +138,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     var blurRadiusPx: Float
-        get() = storedBlurRadiusPx
+        get() = resolvedRadiusPx
         set(value) {
             useSettingsBlurRadius = false
             updateBlurRadiusPx(value)
@@ -148,7 +154,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         }
 
     var backdropTintColor: Int
-        get() = storedBackdropTintColor
+        get() = resolvedTintColor
         set(value) {
             useSettingsTint = false
             updateBackdropTintColor(value)
@@ -325,9 +331,12 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
 
     private fun applySystemBlurSettings() {
         val settings = blurInteractor.settings()
+        customizationState = settings.customization
+        systemBlurEnabled = settings.enabled
         val tint = AxBlurColors.tint(view.context)
         if (useSettingsBlurRadius) updateBlurRadiusPx(settings.blurRadiusPx)
         if (useSettingsTint) updateBackdropTintColor(tint)
+        updateResolvedCustomization()
         if (useSettingsFallback) {
             updateFallbackColor(
                 if (settings.enabled) tint else AxBlurColors.fallback(view.context),
@@ -339,15 +348,32 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         val coerced = if (value.isFinite()) value.coerceAtLeast(0f) else 0f
         if (storedBlurRadiusPx != coerced) {
             storedBlurRadiusPx = coerced
-            blurEffect = null
-            sourceBlurDirty = true
-            view.invalidate()
+            updateResolvedCustomization()
         }
     }
 
     private fun updateBackdropTintColor(value: Int) {
         if (storedBackdropTintColor != value) {
             storedBackdropTintColor = value
+            updateResolvedCustomization()
+        }
+    }
+
+    private fun updateResolvedCustomization() {
+        val radius = if (useSettingsBlurRadius && !systemBlurEnabled) {
+            0f
+        } else {
+            customizationState.resolveRadius(view.context, storedBlurRadiusPx)
+        }
+        val tint = customizationState.resolveTint(view.context, storedBackdropTintColor)
+        if (resolvedRadiusPx != radius) {
+            resolvedRadiusPx = radius
+            blurEffect = null
+            sourceBlurDirty = true
+            view.invalidate()
+        }
+        if (resolvedTintColor != tint) {
+            resolvedTintColor = tint
             view.invalidate()
         }
     }
@@ -376,7 +402,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
                 nativeBackdropBlur.clearCrossWindowBlur()
             }
             if (requireSourceBlur) return
-            drawColor(canvas, fallbackColor)
+            drawColor(canvas, resolvedFallbackColor())
             return
         }
 
@@ -386,7 +412,12 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         }
 
         if (drawSourceBlur(canvas)) return
-        drawColor(canvas, fallbackColor)
+        drawColor(canvas, resolvedFallbackColor())
+    }
+
+    private fun resolvedFallbackColor(): Int {
+        return if (useSettingsBlurRadius && !systemBlurEnabled) fallbackColor
+            else customizationState.resolveTint(view.context, fallbackColor)
     }
 
     private fun drawSourceBlur(canvas: Canvas): Boolean {
@@ -588,7 +619,8 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         canvas.restoreToCount(save)
     }
 
-    private fun resolveBlurEffect(): AndroidRenderEffect {
+    private fun resolveBlurEffect(): AndroidRenderEffect? {
+        if (blurRadiusPx <= 0f) return null
         val cached = blurEffect
         if (cached != null && blurEffectRadius == blurRadiusPx) {
             return cached

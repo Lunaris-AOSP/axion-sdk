@@ -26,6 +26,7 @@ import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 import com.android.axion.blur.model.AxBackdropBlurSettingsSubscription
 import com.android.axion.kotlin.settings.SettingsFlow
 import com.android.axion.kotlin.settings.SettingsType
+import com.android.internal.graphics.drawable.AxBlurCustomization
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -81,10 +82,12 @@ internal class AxBackdropBlurSettingsRepository(
 
     fun createSubscription(
         spec: AxBackdropBlurSettingsSpec,
+        observeCustomization: Boolean,
         onSettingsChanged: () -> Unit,
     ): AxBackdropBlurSettingsSubscription {
         return SettingsFlowSubscription(
             flows = flows(spec),
+            customization = if (observeCustomization) AxBlurCustomization.getInstance(appContext) else null,
             handler = handler,
             onSettingsChanged = onSettingsChanged,
         )
@@ -100,16 +103,25 @@ internal class AxBackdropBlurSettingsRepository(
 
     private class SettingsFlowSubscription(
         private val flows: List<Flow<Unit>>,
-        handler: Handler,
+        private val customization: AxBlurCustomization?,
+        private val handler: Handler,
         private val onSettingsChanged: () -> Unit,
     ) : AxBackdropBlurSettingsSubscription {
         private val scope = CoroutineScope(
             SupervisorJob() + handler.asCoroutineDispatcher("AxBackdropBlurSettings"),
         )
         private var job: Job? = null
+        private val customizationCallback = Runnable {
+            if (job != null) onSettingsChanged()
+        }
+        private val customizationListener = Runnable {
+            handler.removeCallbacks(customizationCallback)
+            handler.post(customizationCallback)
+        }
 
         override fun start() {
             if (job != null) return
+            customization?.addListener(customizationListener)
             job = scope.launch {
                 merge(*flows.toTypedArray()).collect {
                     onSettingsChanged()
@@ -118,6 +130,8 @@ internal class AxBackdropBlurSettingsRepository(
         }
 
         override fun stop() {
+            customization?.removeListener(customizationListener)
+            handler.removeCallbacks(customizationCallback)
             job?.cancel()
             job = null
         }

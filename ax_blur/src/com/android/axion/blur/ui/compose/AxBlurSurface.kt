@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.toSize
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
+import com.android.internal.graphics.drawable.AxBlurCustomization
 import com.android.axion.blur.ui.view.AxViewBackdropBlur
 import com.android.axion.kotlin.settings.SettingsFlow
 import com.android.axion.kotlin.settings.SettingsType
@@ -193,6 +194,8 @@ fun Modifier.axBlurBackground(
             setEnabled(blurEnabled)
         }
     }
+    val customization = remember(view) { AxBlurCustomization.getInstance(view.context) }
+    var overrides by remember(customization) { mutableStateOf(customization.state) }
     val tintArgb = tintColor.toArgb()
     val cornerRadii = remember { FloatArray(8) }
     var sourceCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -204,9 +207,12 @@ fun Modifier.axBlurBackground(
         Float.NaN
     }
 
-    DisposableEffect(blur) {
+    DisposableEffect(blur, customization) {
+        val listener = Runnable { overrides = customization.state }
+        customization.addListener(listener)
         blur.onAttachedToWindow()
         onDispose {
+            customization.removeListener(listener)
             blur.onDetachedFromWindow()
         }
     }
@@ -218,6 +224,11 @@ fun Modifier.axBlurBackground(
     val trackedModifier = axBlurFrameTracking(blurEnabled)
         .onGloballyPositioned { sourceCoordinates = it }
     return trackedModifier.drawWithContent {
+        val resolvedFallbackColor = if (blurEnabled && blur.isCrossWindowBlurActive() && overrides.tintEnabled) {
+            Color(overrides.resolveTint(view.context, tintArgb))
+        } else {
+            fallbackColor
+        }
         val width = size.width.roundToInt()
         val height = size.height.roundToInt()
         val outline = shape?.createOutline(size, layoutDirection, this)
@@ -276,10 +287,10 @@ fun Modifier.axBlurBackground(
         }
         if (!drewBlur) {
             if (outline != null) {
-                drawOutline(outline, color = fallbackColor)
+                drawOutline(outline, color = resolvedFallbackColor)
             } else {
                 drawRoundRect(
-                    color = fallbackColor,
+                    color = resolvedFallbackColor,
                     cornerRadius = CornerRadius(cornerRadiusPx),
                 )
             }

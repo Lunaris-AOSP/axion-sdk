@@ -16,7 +16,10 @@
 
 package com.android.axion.blur.model
 
+import com.android.internal.graphics.drawable.AxBlurCustomization
+
 internal data class AxBackdropBlurSettingsModel(
     val enabled: Boolean,
     val blurRadiusPx: Float,
+    val customization: AxBlurCustomization.State,
 )

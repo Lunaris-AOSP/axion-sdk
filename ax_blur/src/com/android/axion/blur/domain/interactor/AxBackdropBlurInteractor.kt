@@ -22,6 +22,7 @@ import com.android.axion.blur.data.repository.AxBackdropBlurSettingsRepository
 import com.android.axion.blur.model.AxBackdropBlurSettingsModel
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 import com.android.axion.blur.model.AxBackdropBlurSettingsSubscription
+import com.android.internal.graphics.drawable.AxBlurCustomization
 
 internal class AxBackdropBlurInteractor(
     context: Context,
@@ -30,8 +31,10 @@ internal class AxBackdropBlurInteractor(
 ) {
     private val appContext = context.applicationContext ?: context
     private val repository = AxBackdropBlurSettingsRepository(appContext, handler)
+    private val customization = AxBlurCustomization.getInstance(appContext)
 
     fun settings(): AxBackdropBlurSettingsModel {
+        val overrides = customization.state
         val maxRadius = spec.maxRadiusPx ?: maxBlurRadiusPx(appContext)
         val defaultRadius = spec.defaultRadiusPx ?: maxRadius
         val enabled = repository.globalBlurEnabled() && repository.settingEnabled(spec)
@@ -39,19 +42,22 @@ internal class AxBackdropBlurInteractor(
             return AxBackdropBlurSettingsModel(
                 enabled = false,
                 blurRadiusPx = 0f,
+                customization = overrides,
             )
         }
         val radius = repository.secureFloat(spec.radiusKey, defaultRadius)
         return AxBackdropBlurSettingsModel(
             enabled = true,
-            blurRadiusPx = radius.sanitize(maxRadius),
+            blurRadiusPx = overrides.resolveRadius(appContext, radius.sanitize(maxRadius)),
+            customization = overrides,
         )
     }
 
     fun createSubscription(
+        observeCustomization: Boolean = true,
         onSettingsChanged: () -> Unit,
     ): AxBackdropBlurSettingsSubscription {
-        return repository.createSubscription(spec, onSettingsChanged)
+        return repository.createSubscription(spec, observeCustomization, onSettingsChanged)
     }
 
     private fun Float.sanitize(maxRadius: Float): Float {

@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.setFrom
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -577,8 +578,7 @@ private class AxBackdropBlurNode(
         val interactor = AxBackdropBlurInteractor(context)
         updateSettings(interactor)
         settingsObserver = interactor.createSubscription {
-            updateSettings(interactor)
-            invalidateDraw()
+            if (updateSettings(interactor)) invalidateDraw()
         }.also { it.start() }
         updatePreDrawObserver()
         updateAreas()
@@ -638,9 +638,18 @@ private class AxBackdropBlurNode(
             } else {
                 settings.blurRadiusPx
             }
-            val blurRadius = if (settings.enabled) requestedBlurRadius else 0f
+            val blurRadius = if (settings.enabled) {
+                settings.customization.resolveRadius(context, requestedBlurRadius)
+            } else {
+                0f
+            }
             val effect = blurEffect(blurRadius)
-            val tint = resolveColor(style.tint) { AxBlurColors.tint(context) }
+            val originalTint = resolveColor(style.tint) { AxBlurColors.tint(context) }
+            val tint = if (settings.customization.tintEnabled) {
+                Color(settings.customization.resolveTint(context, originalTint.toArgb()))
+            } else {
+                originalTint
+            }
             val fallbackColor = resolveColor(style.fallbackColor) {
                 AxBlurColors.fallback(context)
             }
@@ -707,7 +716,9 @@ private class AxBackdropBlurNode(
                     drawContent()
                     return
                 }
-                drawOverlay(fallbackColor)
+                drawOverlay(
+                    if (settings.enabled && settings.customization.tintEnabled) tint else fallbackColor,
+                )
             }
             drawContent()
         } finally {
@@ -753,7 +764,7 @@ private class AxBackdropBlurNode(
         if (current != null && nativeBackdropBlurView === view) return current
         current?.onDetachedFromWindow()
         nativeBackdropBlurView = view
-        return AxViewBackdropBlur(view, observeSettings = false).apply {
+        return AxViewBackdropBlur(view, observeSettings = false, applyGlobalCustomization = false).apply {
             setEnabled(true)
             onAttachedToWindow()
             nativeBackdropBlur = this
@@ -895,8 +906,11 @@ private class AxBackdropBlurNode(
         return if (color.isSpecified) color else Color(defaultColor())
     }
 
-    private fun updateSettings(interactor: AxBackdropBlurInteractor) {
-        settingsValues = interactor.settings()
+    private fun updateSettings(interactor: AxBackdropBlurInteractor): Boolean {
+        val next = interactor.settings()
+        if (settingsValues == next) return false
+        settingsValues = next
+        return true
     }
 
     private fun clearAreaListeners() {
