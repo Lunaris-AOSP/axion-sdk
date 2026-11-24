@@ -209,9 +209,20 @@ fun Modifier.axBlurBackground(
 
     DisposableEffect(blur, customization) {
         val listener = Runnable { overrides = customization.state }
+        val attachListener = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) {
+                blur.onAttachedToWindow()
+            }
+
+            override fun onViewDetachedFromWindow(view: View) {
+                blur.onDetachedFromWindow()
+            }
+        }
         customization.addListener(listener)
-        blur.onAttachedToWindow()
+        view.addOnAttachStateChangeListener(attachListener)
+        if (view.isAttachedToWindow) blur.onAttachedToWindow()
         onDispose {
+            view.removeOnAttachStateChangeListener(attachListener)
             customization.removeListener(listener)
             blur.onDetachedFromWindow()
         }
@@ -221,7 +232,7 @@ fun Modifier.axBlurBackground(
         blur.setEnabled(blurEnabled)
     }
 
-    val trackedModifier = axBlurFrameTracking(blurEnabled)
+    val trackedModifier = axBlurFrameTracking(blurEnabled, blur)
         .onGloballyPositioned { sourceCoordinates = it }
     return trackedModifier.drawWithContent {
         val resolvedFallbackColor = if (blurEnabled && blur.isCrossWindowBlurActive() && overrides.tintEnabled) {
@@ -299,16 +310,17 @@ fun Modifier.axBlurBackground(
     }
 }
 
-private fun Modifier.axBlurFrameTracking(enabled: Boolean): Modifier =
-    this then AxBlurFrameTrackingElement(enabled)
+private fun Modifier.axBlurFrameTracking(enabled: Boolean, blur: AxViewBackdropBlur): Modifier =
+    this then AxBlurFrameTrackingElement(enabled, blur)
 
 private data class AxBlurFrameTrackingElement(
     val enabled: Boolean,
+    val blur: AxViewBackdropBlur,
 ) : ModifierNodeElement<AxBlurFrameTrackingNode>() {
-    override fun create() = AxBlurFrameTrackingNode(enabled)
+    override fun create() = AxBlurFrameTrackingNode(enabled, blur)
 
     override fun update(node: AxBlurFrameTrackingNode) {
-        node.update(enabled)
+        node.update(enabled, blur)
     }
 
     override fun InspectorInfo.inspectableProperties() {
@@ -319,6 +331,7 @@ private data class AxBlurFrameTrackingElement(
 
 private class AxBlurFrameTrackingNode(
     private var enabled: Boolean,
+    private var blur: AxViewBackdropBlur,
 ) : Modifier.Node(),
     CompositionLocalConsumerModifierNode,
     DrawModifierNode,
@@ -329,8 +342,14 @@ private class AxBlurFrameTrackingNode(
     private var lastCoordinates: LayoutCoordinates? = null
     private var geometry = AxBlurFrameGeometry()
     private var hostView: View? = null
-    private var observingPreDraw = false
+    private var preDrawObserver: ViewTreeObserver? = null
     private var skipNextHostDirty = false
+    private val blurInvalidationListener = Runnable {
+        if (isAttached) {
+            updatePreDrawObserver()
+            invalidateDraw()
+        }
+    }
     private val preDrawListener = ViewTreeObserver.OnPreDrawListener {
         if (isAttached && enabled) {
             val viewDirty = hostView?.isDirty == true
@@ -351,18 +370,25 @@ private class AxBlurFrameTrackingNode(
 
     override val shouldAutoInvalidate = false
 
-    fun update(enabled: Boolean) {
-        if (this.enabled == enabled) return
+    fun update(enabled: Boolean, blur: AxViewBackdropBlur) {
+        if (this.enabled == enabled && this.blur === blur) return
+        if (this.blur !== blur) {
+            this.blur.setOnInvalidationListener(null)
+            this.blur = blur
+            if (isAttached) blur.setOnInvalidationListener(blurInvalidationListener)
+        }
         this.enabled = enabled
         updatePreDrawObserver()
         invalidateDraw()
     }
 
     override fun onAttach() {
+        blur.setOnInvalidationListener(blurInvalidationListener)
         onObservedReadsChanged()
     }
 
     override fun onDetach() {
+        blur.setOnInvalidationListener(null)
         removePreDrawObserver()
         hostView = null
         lastCoordinates = null
@@ -432,18 +458,16 @@ private class AxBlurFrameTrackingNode(
             hostView = view
             skipNextHostDirty = false
         }
-        if (view != null && !observingPreDraw) {
-            view.viewTreeObserver.addOnPreDrawListener(preDrawListener)
-            observingPreDraw = true
-        }
-        if (view == null) {
+        val observer = view?.viewTreeObserver
+        if (preDrawObserver !== observer) {
             removePreDrawObserver()
+            preDrawObserver = observer
+            observer?.addOnPreDrawListener(preDrawListener)
         }
     }
 
     private fun removePreDrawObserver() {
-        if (!observingPreDraw) return
-        hostView?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(preDrawListener)
-        observingPreDraw = false
+        preDrawObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(preDrawListener)
+        preDrawObserver = null
     }
 }

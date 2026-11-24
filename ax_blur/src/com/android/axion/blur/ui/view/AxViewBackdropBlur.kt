@@ -33,6 +33,7 @@ import android.util.ArraySet
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.WindowManager
 import com.android.axion.blur.AxBlurSupport
 import com.android.axion.blur.AxWindowBlurSource
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
@@ -40,6 +41,7 @@ import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
 import com.android.axion.blur.model.AxBackdropBlurSettingsSubscription
 import com.android.internal.graphics.drawable.AxBlurCustomization
 import com.android.internal.graphics.drawable.BackgroundBlurDrawable
+import java.util.function.Consumer
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -71,6 +73,18 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     private var settingsSubscription: AxBackdropBlurSettingsSubscription? = null
     private var observingPreDraw = false
     private var observingDraw = false
+    private val windowManager = view.context.getSystemService(WindowManager::class.java)
+    private var observingCrossWindowBlur = false
+    private val crossWindowBlurListener = Consumer<Boolean> {
+        if (observingCrossWindowBlur) {
+            clearCrossWindowBlur()
+        }
+    }
+    private var windowVisibilityObserver: ViewTreeObserver? = null
+    private val windowVisibilityListener = ViewTreeObserver.OnWindowVisibilityChangeListener {
+        if (enabled && onInvalidationListener != null) clear()
+    }
+    private var onInvalidationListener: Runnable? = null
     private var attached = false
     private var enabled = false
     private var globalBlurEnabled = true
@@ -155,6 +169,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
             updatePreDrawObserver()
         }
         updateSettingsObserver()
+        updateWindowObservers()
         if (enabled) {
             applyBlurSettings()
         }
@@ -194,6 +209,12 @@ class AxViewBackdropBlur @JvmOverloads constructor(
 
     fun setOnCustomizationChangedListener(listener: Runnable?) {
         onCustomizationChanged = listener
+    }
+
+    fun setOnInvalidationListener(listener: Runnable?) {
+        if (onInvalidationListener === listener) return
+        onInvalidationListener = listener
+        updateWindowObservers()
     }
 
     private fun updateOverlayColor() {
@@ -308,6 +329,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     fun setCrossWindowBlurEnabled(enabled: Boolean) {
         if (crossWindowBlurEnabled == enabled) return
         crossWindowBlurEnabled = enabled
+        updateWindowObservers()
         if (!enabled) {
             clearCrossWindowBlur()
         }
@@ -359,11 +381,13 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         AxWindowBlurSource.addListener(root, windowSourceListener)
         applyCustomization()
         updateSettingsObserver()
+        updateWindowObservers()
         updatePreDrawObserver()
     }
 
     fun onDetachedFromWindow() {
         attached = false
+        updateWindowObservers()
         windowSourceRoot?.let { AxWindowBlurSource.removeListener(it, windowSourceListener) }
         windowSourceRoot = null
         windowSourceView = null
@@ -1222,6 +1246,28 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         }
     }
 
+    private fun updateWindowObservers() {
+        val active = attached && enabled && onInvalidationListener != null
+        val observer = if (active) view.viewTreeObserver else null
+        if (windowVisibilityObserver !== observer) {
+            windowVisibilityObserver?.takeIf { it.isAlive }
+                ?.removeOnWindowVisibilityChangeListener(windowVisibilityListener)
+            windowVisibilityObserver = observer
+            observer?.addOnWindowVisibilityChangeListener(windowVisibilityListener)
+        }
+        val shouldObserve = active && crossWindowBlurEnabled && windowManager != null
+        if (shouldObserve == observingCrossWindowBlur) return
+        observingCrossWindowBlur = shouldObserve
+        if (shouldObserve) {
+            windowManager?.addCrossWindowBlurEnabledListener(
+                view.context.mainExecutor,
+                crossWindowBlurListener,
+            )
+        } else {
+            windowManager?.removeCrossWindowBlurEnabledListener(crossWindowBlurListener)
+        }
+    }
+
     private fun addPreDrawObserver() {
         if (!observingPreDraw) {
             view.viewTreeObserver.addOnPreDrawListener(preDrawListener)
@@ -1452,6 +1498,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     }
 
     private fun invalidateHost() {
+        onInvalidationListener?.run()
         view.postInvalidateOnAnimation()
         val root = view.rootView
         if (root !== view) {
