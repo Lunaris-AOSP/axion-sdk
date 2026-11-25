@@ -18,6 +18,7 @@ package com.android.axion.blur.ui.view
 
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -28,6 +29,7 @@ import android.graphics.RenderNode
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.os.Build
 import android.util.ArraySet
 import android.view.View
@@ -35,6 +37,9 @@ import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.view.WindowManager
 import com.android.axion.blur.AxBlurSupport
+import com.android.axion.blur.AxBlurRim
+import com.android.axion.blur.AxBlurRimDrawable
+import com.android.axion.blur.resolveRim
 import com.android.axion.blur.AxWindowBlurSource
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
 import com.android.axion.blur.model.AxBackdropBlurSettingsSpec
@@ -54,6 +59,11 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     private val rect = RectF()
     private val childRect = RectF()
     private val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rimPainters = LinkedHashMap<Any, AxBlurRimPainter>()
+    private var rim = AxBlurRim.None
+    private var applyGlobalRim = true
+    private var drawRimWithBlur = true
+    private var backdropDrawn = false
     private val targetRect = Rect()
     private val targetRectF = RectF()
     private val transformMatrix = Matrix()
@@ -199,6 +209,73 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         updateOverlayColor()
     }
 
+    fun getRim(): AxBlurRim = rim
+
+    fun setRim(rim: AxBlurRim) {
+        if (this.rim == rim) return
+        this.rim = rim
+        if (!rim.enabled) rimPainters.clear()
+        invalidateHost()
+    }
+
+    /** Toggle the current style without losing its tuning. The initial style is ColorOS. */
+    fun setRimEnabled(enabled: Boolean) {
+        setRim(rim.copy(enabled = enabled))
+    }
+
+    fun setApplyGlobalRim(enabled: Boolean) {
+        if (applyGlobalRim == enabled) return
+        applyGlobalRim = enabled
+        invalidateHost()
+    }
+
+    fun getResolvedRim(): AxBlurRim = if (applyGlobalCustomization && applyGlobalRim) {
+        customizationState.resolveRim(rim)
+    } else rim
+
+    fun setDrawRimWithBlur(enabled: Boolean) {
+        if (drawRimWithBlur == enabled) return
+        drawRimWithBlur = enabled
+        invalidateHost()
+    }
+
+    @JvmOverloads
+    fun drawRim(
+        canvas: Canvas, left: Int, top: Int, right: Int, bottom: Int,
+        cornerRadius: Float, alpha: Int = this.alpha, colorFilter: ColorFilter? = null,
+    ) {
+        if (!enabled || !backdropDrawn) return
+        val style = getResolvedRim()
+        if (!style.enabled) return
+        val painter = rimPainters[defaultKey] ?: AxBlurRimPainter().also { rimPainters[defaultKey] = it }
+        painter.draw(
+            canvas, style, view.resources.displayMetrics.density,
+            left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), cornerRadius,
+            alpha = alpha,
+            colorFilter = colorFilter,
+        )
+    }
+
+    fun wrapBackgroundWithRim(background: Drawable, cornerRadiusPx: Float): Drawable {
+        val showRim = enabled && getResolvedRim().enabled
+        setDrawRimWithBlur(!showRim)
+        if (!showRim) return background
+        val configuredRadius = cornerRadiusPx
+        val highlight = object : AxBlurRimDrawable(view.resources.displayMetrics.density) {
+            override fun draw(canvas: Canvas) {
+                val rect = bounds
+                val radius = if (background is GradientDrawable) background.cornerRadius else cornerRadiusPx
+                this@AxViewBackdropBlur.drawRim(
+                    canvas, rect.left, rect.top, rect.right, rect.bottom, radius,
+                    (getAlpha() * this@AxViewBackdropBlur.alpha / 255f).roundToInt(), colorFilter,
+                )
+            }
+        }.apply { this.cornerRadiusPx = configuredRadius }
+        return LayerDrawable(arrayOf(background, highlight)).apply {
+            setPaddingMode(LayerDrawable.PADDING_MODE_STACK)
+        }
+    }
+
     fun isTintOverrideEnabled(): Boolean {
         return applyGlobalCustomization && customizationState.tintEnabled
     }
@@ -233,6 +310,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
         updateOverlayColor()
         applyBlurSettings()
         onCustomizationChanged?.run()
+        invalidateHost()
     }
 
     fun setBlurRadiusPx(radius: Float) {
@@ -572,6 +650,45 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     }
 
     private fun drawInternal(
+        canvas: Canvas,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+        cornerRadii: FloatArray?,
+        cornerRadius: Float,
+        alpha: Int,
+        key: Any = defaultKey,
+        clipPath: Path? = null,
+        applyViewAlpha: Boolean = true,
+        targetAlphaSource: View? = null,
+    ): Boolean {
+        val drawn = drawInternalWithoutRim(
+            canvas, left, top, right, bottom, cornerRadii, cornerRadius, alpha,
+            key, clipPath, applyViewAlpha, targetAlphaSource,
+        )
+        val resolvedRim = getResolvedRim()
+        backdropDrawn = drawn && resolvedCrossWindowAlpha(
+                DrawableAlphaState(alpha.coerceIn(0, 255), applyViewAlpha, targetAlphaSource),
+            ) > 0
+        if (backdropDrawn && drawRimWithBlur && resolvedRim.enabled) {
+            val rimAlpha = if (targetAlphaSource == null) alpha.coerceIn(0, 255) else {
+                scaledDrawableAlpha(alpha.coerceIn(0, 255), targetLocalAlpha(targetAlphaSource) ?: 0f)
+            }
+            val rimPainter = rimPainters[key] ?: AxBlurRimPainter().also {
+                if (rimPainters.size >= 32) rimPainters.remove(rimPainters.keys.first())
+                rimPainters[key] = it
+            }
+            rimPainter.draw(
+                canvas, resolvedRim, view.resources.displayMetrics.density,
+                left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(),
+                cornerRadius, cornerRadii, clipPath, rimAlpha,
+            )
+        }
+        return drawn
+    }
+
+    private fun drawInternalWithoutRim(
         canvas: Canvas,
         left: Int,
         top: Int,
@@ -1465,13 +1582,16 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     }
 
     fun clear() {
+        backdropDrawn = false
         clearCrossWindowBlur()
+        rimPainters.clear()
         trackedStates.clear()
         discardSourceBlur()
         updatePreDrawObserver()
     }
 
     fun clearCrossWindowBlur() {
+        backdropDrawn = false
         drawables.values.forEach(::deactivateCrossWindowBlurDrawable)
         drawables.clear()
         drawableAlphaStates.clear()
@@ -1488,6 +1608,7 @@ class AxViewBackdropBlur @JvmOverloads constructor(
     fun clear(target: View?) {
         if (target != null) {
             clearKey(target)
+            rimPainters.remove(target)
             if (target === resolvedSourceView() || sourceContentViews.remove(target)) {
                 discardSourceBlur()
             }

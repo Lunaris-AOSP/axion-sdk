@@ -20,7 +20,10 @@ import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Outline
+import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.DrawableWrapper
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.view.View
@@ -53,6 +56,7 @@ class AxWindowBlurController @JvmOverloads constructor(
     private val surfaces = LinkedHashMap<View, SurfaceBlurState>()
     private val pendingPreDrawListeners = ArrayList<PendingPreDraw>()
     private var started = false
+    private var rim = AxBlurRim.None
     private val windowManager = this.context.getSystemService(WindowManager::class.java)
     private val crossWindowBlurListener = Consumer<Boolean> {
         if (started) apply()
@@ -86,6 +90,18 @@ class AxWindowBlurController @JvmOverloads constructor(
 
     fun apply() {
         apply(blurInteractor.settings())
+    }
+
+    fun getRim(): AxBlurRim = rim
+
+    fun setRim(rim: AxBlurRim) {
+        if (this.rim == rim) return
+        this.rim = rim
+        if (started) apply()
+    }
+
+    fun setRimEnabled(enabled: Boolean) {
+        setRim(rim.copy(enabled = enabled))
     }
 
     fun addSurface(view: View?) {
@@ -126,12 +142,14 @@ class AxWindowBlurController @JvmOverloads constructor(
         } else {
             0
         }
-        updateSurfaceChangeObserver(started && settings.customization.tintEnabled && surfaces.isNotEmpty())
+        val resolvedRim = settings.customization.resolveRim(rim)
+        updateSurfaceChangeObserver(started && (settings.customization.tintEnabled || resolvedRim.enabled) && surfaces.isNotEmpty())
         val alpha = if (supportedRadius > 0) surfaceAlpha.sanitizedAlpha() else 255
         applyWindowBlur(supportedRadius, settings.customization.radiusEnabled)
         applySurfaceBlur(
             supportedRadius, alpha,
             settings.customization.takeIf { settings.enabled && blurSupported },
+            resolvedRim,
         )
     }
 
@@ -172,9 +190,9 @@ class AxWindowBlurController @JvmOverloads constructor(
         }
     }
 
-    private fun applySurfaceBlur(radius: Int, alpha: Int, customization: AxBlurCustomization.State?) {
+    private fun applySurfaceBlur(radius: Int, alpha: Int, customization: AxBlurCustomization.State?, resolvedRim: AxBlurRim) {
         surfaces.forEach { (view, state) ->
-            state.apply(view, context, radius, alpha, customization)
+            state.apply(view, context, radius, alpha, customization, resolvedRim)
         }
     }
 
@@ -212,6 +230,11 @@ class AxWindowBlurController @JvmOverloads constructor(
     ) {
         private var blurDrawable: BackgroundBlurDrawable? = null
         private var layerDrawable: LayerDrawable? = null
+        private var rimLayer: LayerDrawable? = null
+        private var rimBase: Drawable? = null
+        private var rimDrawable: AxBlurRimDrawable? = null
+        private val rimPath = Path()
+        private val rimRect = RectF()
         private var surfaceBackground: Drawable? = originalBackground?.mutate()
         private val outline = Outline()
         private var tintOverridden = false
@@ -222,12 +245,14 @@ class AxWindowBlurController @JvmOverloads constructor(
         fun apply(
             view: View, context: Context, radius: Int, alpha: Int,
             customization: AxBlurCustomization.State?,
+            rim: AxBlurRim,
         ) {
             captureExternalBackground(view)
             val overrideTint = customization?.tintEnabled == true
             if (radius <= 0 && !overrideTint) {
                 restore(view)
                 (surfaceBackground as? BackgroundBlurDrawable)?.setBlurRadius(0)
+                applyRim(view, rim, alpha)
                 return
             }
             val existingBlur = surfaceBackground as? BackgroundBlurDrawable
@@ -250,12 +275,14 @@ class AxWindowBlurController @JvmOverloads constructor(
                 existingBlur.setBlurRadius(radius)
                 if (!overrideTint) existingBlur.setAlpha(255)
                 view.background = existingBlur
+                applyRim(view, rim, alpha)
                 return
             }
             val blur = blurDrawable ?: view.viewRootImpl?.createBackgroundBlurDrawable()?.also {
                 blurDrawable = it
             } ?: run {
                 restore(view)
+                applyRim(view, rim, alpha)
                 return
             }
             blur.setVisible(true, false)
@@ -278,6 +305,50 @@ class AxWindowBlurController @JvmOverloads constructor(
                     layerDrawable = it
                 }
             }
+            applyRim(view, rim, alpha)
+        }
+
+        private fun applyRim(view: View, rim: AxBlurRim, alpha: Int) {
+            val base = if (view.background === rimLayer) rimBase else view.background
+            if (!rim.enabled) {
+                if (view.background === rimLayer && rimLayer != null) view.background = base
+                rimLayer = null
+                rimBase = null
+                rimDrawable = null
+                return
+            }
+            val highlight = rimDrawable ?: AxBlurRimDrawable(view.resources.displayMetrics.density, rim).also {
+                rimDrawable = it
+            }
+            highlight.rim = rim
+            highlight.alpha = originalAlpha
+            val background = resolveSurfaceDrawable(surfaceBackground) ?: surfaceBackground
+            if (background is GradientDrawable) {
+                if (background.shape == GradientDrawable.OVAL) {
+                    rimRect.set(0f, 0f, view.width.toFloat(), view.height.toFloat())
+                    rimPath.rewind()
+                    rimPath.addOval(rimRect, Path.Direction.CW)
+                    highlight.setCornerRadii(null)
+                    highlight.setClipPath(rimPath)
+                    highlight.cornerRadiusPx = 0f
+                } else {
+                    highlight.setClipPath(null)
+                    highlight.setCornerRadii(background.cornerRadii)
+                    highlight.cornerRadiusPx = background.cornerRadius
+                }
+            } else {
+                highlight.setCornerRadii(null)
+                outline.setEmpty()
+                background?.getOutline(outline)
+                highlight.setClipPath(if (outline.mMode == Outline.MODE_PATH) outline.mPath else null)
+                highlight.cornerRadiusPx = outline.radius.takeIf { it >= 0f } ?: 0f
+            }
+            if (rimLayer == null || rimBase !== base) {
+                rimBase = base
+                rimLayer = LayerDrawable(if (base == null) arrayOf(highlight) else arrayOf(base, highlight))
+                    .apply { setPaddingMode(LayerDrawable.PADDING_MODE_STACK) }
+            }
+            view.background = rimLayer
         }
 
         fun restore(view: View) {
@@ -294,24 +365,33 @@ class AxWindowBlurController @JvmOverloads constructor(
                 tintOverridden = false
             }
             surfaceBackground.applyAlpha(originalAlpha)
-            if (view.background === layerDrawable || view.background === blurDrawable) {
+            val background = view.background
+            if ((layerDrawable != null && background === layerDrawable) ||
+                (blurDrawable != null && background === blurDrawable) ||
+                (rimLayer != null && background === rimLayer)
+            ) {
                 view.background = surfaceBackground
             }
             layerDrawable = null
+            rimLayer = null
+            rimBase = null
+            rimDrawable = null
         }
 
         fun hasExternalBackground(view: View): Boolean {
-            val background = view.background
-            return background !== layerDrawable && background !== blurDrawable && background !== surfaceBackground
+            return !ownsBackground(view.background)
+        }
+
+        private fun ownsBackground(background: Drawable?): Boolean {
+            return background === surfaceBackground ||
+                (layerDrawable != null && background === layerDrawable) ||
+                (blurDrawable != null && background === blurDrawable) ||
+                (rimLayer != null && background === rimLayer)
         }
 
         private fun captureExternalBackground(view: View) {
             val background = view.background
-            if (
-                background !== layerDrawable &&
-                background !== blurDrawable &&
-                background !== surfaceBackground
-            ) {
+            if (!ownsBackground(background)) {
                 if (tintOverridden) {
                     (surfaceBackground as? BackgroundBlurDrawable)?.let {
                         it.setTintOverride(false, 0)
@@ -325,11 +405,32 @@ class AxWindowBlurController @JvmOverloads constructor(
                 originalAlpha = background?.alpha ?: 255
                 surfaceBackground = background?.mutate()
                 layerDrawable = null
+                rimLayer = null
+                rimBase = null
+                rimDrawable = null
             }
         }
 
+        private fun resolveSurfaceDrawable(drawable: Drawable?): Drawable? {
+            if (drawable == null || drawable is BackgroundBlurDrawable) return null
+            if (drawable.current !== drawable) {
+                return resolveSurfaceDrawable(drawable.current)
+            }
+            if (drawable is DrawableWrapper) {
+                return resolveSurfaceDrawable(drawable.drawable)
+            }
+            if (drawable is LayerDrawable) {
+                for (i in 0 until drawable.numberOfLayers) {
+                    val resolved = resolveSurfaceDrawable(drawable.getDrawable(i))
+                    if (resolved != null) return resolved
+                }
+                return null
+            }
+            return drawable
+        }
+
         private fun applyCorners(blur: BackgroundBlurDrawable) {
-            val background = surfaceBackground
+            val background = resolveSurfaceDrawable(surfaceBackground) ?: surfaceBackground
             if (background is GradientDrawable) {
                 val radii = background.cornerRadii
                 if (radii != null && radii.size >= 8) {

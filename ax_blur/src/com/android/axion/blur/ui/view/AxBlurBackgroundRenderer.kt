@@ -114,6 +114,16 @@ class AxBlurBackgroundRenderer @JvmOverloads constructor(
         blur.setOverlayColor(color)
     }
 
+    fun getRim(): AxBlurRim = blur.getRim()
+
+    fun setRim(rim: AxBlurRim) {
+        blur.setRim(rim)
+    }
+
+    fun setRimEnabled(enabled: Boolean) {
+        blur.setRimEnabled(enabled)
+    }
+
     fun verifyDrawable(who: Drawable): Boolean {
         return blur.verifyDrawable(who)
     }

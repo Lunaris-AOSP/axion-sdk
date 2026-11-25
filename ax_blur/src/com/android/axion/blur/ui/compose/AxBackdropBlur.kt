@@ -123,6 +123,7 @@ data class AxBackdropBlurStyle(
     val tint: Color = Color.Unspecified,
     val fallbackColor: Color = Color.Unspecified,
     val cornerRadius: Dp = Dp.Unspecified,
+    val rim: AxBlurRim = AxBlurRim.None,
 )
 
 object AxBackdropBlurDefaults {
@@ -133,6 +134,7 @@ object AxBackdropBlurDefaults {
     fun style(
         blurRadius: Dp = Dp.Unspecified,
         cornerRadius: Dp = Dp.Unspecified,
+        rim: AxBlurRim = AxBlurRim.None,
     ): AxBackdropBlurStyle {
         LocalConfiguration.current
         val context = LocalContext.current
@@ -144,6 +146,7 @@ object AxBackdropBlurDefaults {
                 settings.blurRadiusPx.toDp()
             },
             cornerRadius = cornerRadius,
+            rim = rim,
             tint = tint,
             fallbackColor = Color(AxBlurColors.fallback(context)),
         )
@@ -154,6 +157,7 @@ object AxBackdropBlurDefaults {
         blurRadius: Dp = Dp.Unspecified,
         cornerRadius: Dp = Dp.Unspecified,
         level: Int = 0,
+        rim: AxBlurRim = AxBlurRim.None,
     ): AxBackdropBlurStyle {
         LocalConfiguration.current
         val context = LocalContext.current
@@ -164,6 +168,7 @@ object AxBackdropBlurDefaults {
                 settings.blurRadiusPx.toDp()
             },
             cornerRadius = cornerRadius,
+            rim = rim,
             tint = Color(AxBlurColors.surfaceEffect(context, level)),
             fallbackColor = Color(AxBlurColors.fallback(context)),
         )
@@ -216,7 +221,8 @@ fun Modifier.axBackdropBlur(
     state: AxBackdropBlurState,
     style: AxBackdropBlurStyle = AxBackdropBlurDefaults.Style,
     zIndex: Float = 1f,
-): Modifier = this then AxBackdropBlurElement(state, style, zIndex)
+): Modifier = (this then AxBackdropBlurElement(state, style, zIndex))
+    .axBlurRimWithSettings(style.rim, cornerRadius = style.cornerRadius)
 
 @Stable
 fun Modifier.axBlurSurface(
@@ -224,7 +230,8 @@ fun Modifier.axBlurSurface(
     style: AxBackdropBlurStyle,
     shape: Shape,
     zIndex: Float = 1f,
-): Modifier = clip(shape).axBackdropBlur(state, style, zIndex)
+): Modifier = (clip(shape) then AxBackdropBlurElement(state, style, zIndex))
+    .axBlurRimWithSettings(style.rim, shape = shape, cornerRadius = style.cornerRadius)
 
 internal class AxBackdropBlurArea {
     var position by mutableStateOf(Offset.Unspecified)

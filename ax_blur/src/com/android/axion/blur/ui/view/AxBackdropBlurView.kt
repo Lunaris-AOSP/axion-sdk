@@ -34,6 +34,7 @@ import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import com.android.axion.blur.domain.interactor.AxBackdropBlurInteractor
 import com.android.axion.blur.ui.view.AxViewBackdropBlur
+import com.android.axion.blur.ui.view.AxBlurRimPainter
 import com.android.internal.graphics.drawable.AxBlurCustomization
 import kotlin.math.roundToInt
 
@@ -96,6 +97,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     private val path = Path()
     private val rect = RectF()
     private val childRect = RectF()
+    private val rimPainter by lazy { AxBlurRimPainter() }
     private val nativeBackdropBlur = AxViewBackdropBlur(view, observeSettings = false, applyGlobalCustomization = false).apply {
         setEnabled(true)
     }
@@ -152,6 +154,17 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
                 view.invalidate()
             }
         }
+
+    var rim: AxBlurRim = AxBlurRim.None
+        set(value) {
+            if (field == value) return
+            field = value
+            view.invalidate()
+        }
+
+    fun setRimEnabled(enabled: Boolean) {
+        rim = rim.copy(enabled = enabled)
+    }
 
     var backdropTintColor: Int
         get() = resolvedTintColor
@@ -229,7 +242,14 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
     }
 
     fun draw(canvas: Canvas) {
-        drawBackdrop(canvas)
+        val drawn = drawBackdrop(canvas)
+        val resolvedRim = customizationState.resolveRim(rim)
+        if (drawn && resolvedRim.enabled) {
+            rimPainter.draw(
+                canvas, resolvedRim, view.resources.displayMetrics.density,
+                0f, 0f, view.width.toFloat(), view.height.toFloat(), cornerRadiusPx,
+            )
+        }
     }
 
     fun setEnabled(enabled: Boolean) {
@@ -304,6 +324,22 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
                 R.styleable.AxBackdropBlurLayout_axBackdropBlurCornerRadius,
                 0f,
             )
+            val defaults = AxBlurRim.ColorOS
+            val density = view.resources.displayMetrics.density
+            rim = AxBlurRim(
+                enabled = array.getBoolean(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimEnabled, false),
+                color = array.getColor(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimColor, defaults.color),
+                strength = array.getFloat(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimStrength, defaults.strength),
+                topAlpha = array.getFloat(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimTopAlpha, defaults.topAlpha),
+                bottomAlpha = array.getFloat(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimBottomAlpha, defaults.bottomAlpha),
+                sideAlpha = array.getFloat(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimSideAlpha, defaults.sideAlpha),
+                edgeWidthDp = array.getDimension(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimEdgeWidth, defaults.edgeWidthDp * density) / density,
+                glowDepthDp = array.getDimension(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimGlowDepth, defaults.glowDepthDp * density) / density,
+                glowAlpha = array.getFloat(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimGlowAlpha, defaults.glowAlpha),
+                cornerWidthScale = array.getFloat(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimCornerWidthScale, defaults.cornerWidthScale),
+                cornerAlphaScale = array.getFloat(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimCornerAlphaScale, defaults.cornerAlphaScale),
+                cornerTaperPower = array.getFloat(R.styleable.AxBackdropBlurLayout_axBackdropBlurRimCornerTaperPower, defaults.cornerTaperPower),
+            )
             if (array.hasValue(R.styleable.AxBackdropBlurLayout_axBackdropBlurTint)) {
                 backdropTintColor = array.getColor(
                     R.styleable.AxBackdropBlurLayout_axBackdropBlurTint,
@@ -342,6 +378,7 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
                 if (settings.enabled) tint else AxBlurColors.fallback(view.context),
             )
         }
+        view.invalidate()
     }
 
     private fun updateBlurRadiusPx(value: Float) {
@@ -385,34 +422,34 @@ class AxBackdropBlurRenderer @JvmOverloads constructor(
         }
     }
 
-    private fun drawBackdrop(canvas: Canvas) {
-        if (!enabled) return
-        if (!shouldDraw()) return
+    private fun drawBackdrop(canvas: Canvas): Boolean {
+        if (!enabled || !shouldDraw()) return false
 
         if (preferSourceBlur) {
             val drewCrossWindow = drawCrossWindowBlur(canvas)
             if (drewCrossWindow && shouldUseCrossWindowBlur()) {
                 if (sourceBlurRecorded) discardSourceBlur()
                 drawColor(canvas, backdropTintColor)
-                return
+                return true
             }
             val drewSource = drawSourceBlur(canvas)
-            if (drewSource) return
+            if (drewSource) return true
             if (drewCrossWindow) {
                 nativeBackdropBlur.clearCrossWindowBlur()
             }
-            if (requireSourceBlur) return
+            if (requireSourceBlur) return false
             drawColor(canvas, resolvedFallbackColor())
-            return
+            return true
         }
 
         if (drawCrossWindowBlur(canvas)) {
             drawColor(canvas, backdropTintColor)
-            return
+            return true
         }
 
-        if (drawSourceBlur(canvas)) return
+        if (drawSourceBlur(canvas)) return true
         drawColor(canvas, resolvedFallbackColor())
+        return true
     }
 
     private fun resolvedFallbackColor(): Int {
@@ -752,6 +789,16 @@ open class AxBackdropBlurLayout @JvmOverloads constructor(
         set(value) {
             renderer.backdropTintColor = value
         }
+
+    var rim: AxBlurRim
+        get() = renderer.rim
+        set(value) {
+            renderer.rim = value
+        }
+
+    fun setRimEnabled(enabled: Boolean) {
+        renderer.setRimEnabled(enabled)
+    }
 
     var fallbackColor: Int
         get() = renderer.fallbackColor

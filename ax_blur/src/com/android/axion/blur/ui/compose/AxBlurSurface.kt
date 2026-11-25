@@ -21,6 +21,7 @@ import android.view.View
 import android.view.ViewTreeObserver
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -41,6 +42,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -156,6 +158,7 @@ fun AxBlurSurface(
     tintColor: Color? = null,
     settingsSpec: AxBackdropBlurSettingsSpec = AxBackdropBlurSettingsSpec.system(),
     contentAlignment: Alignment = Alignment.TopStart,
+    rim: AxBlurRim = AxBlurRim.None,
     content: @Composable BoxScope.() -> Unit = {},
 ) {
     val resolvedSurfaceColor = surfaceColor ?: AxBlurSurfaceDefaults.surfaceColor()
@@ -170,6 +173,7 @@ fun AxBlurSurface(
                 cornerRadius = cornerRadius,
                 settingsSpec = settingsSpec,
                 shape = shape,
+                rim = rim,
             ),
         contentAlignment = contentAlignment,
         content = content,
@@ -184,6 +188,7 @@ fun Modifier.axBlurBackground(
     cornerRadius: Dp = Dp.Unspecified,
     settingsSpec: AxBackdropBlurSettingsSpec = AxBackdropBlurSettingsSpec.system(),
     shape: Shape? = null,
+    rim: AxBlurRim = AxBlurRim.None,
 ): Modifier {
     val density = LocalDensity.current
     val view = LocalView.current
@@ -192,12 +197,14 @@ fun Modifier.axBlurBackground(
         AxViewBackdropBlur(view).apply {
             useSettings(settingsSpec)
             setEnabled(blurEnabled)
+            setApplyGlobalRim(false)
         }
     }
     val customization = remember(view) { AxBlurCustomization.getInstance(view.context) }
     var overrides by remember(customization) { mutableStateOf(customization.state) }
     val tintArgb = tintColor.toArgb()
     val cornerRadii = remember { FloatArray(8) }
+    val genericBounds = remember { android.graphics.RectF() }
     var sourceCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val sourceMatrix = remember { androidx.compose.ui.graphics.Matrix() }
     val sourceAndroidMatrix = remember { android.graphics.Matrix() }
@@ -285,7 +292,13 @@ fun Modifier.axBlurBackground(
                             0f,
                         )
                     }
-                    else -> blur.draw(
+                    is Outline.Generic -> {
+                        genericBounds.set(0f, 0f, size.width, size.height)
+                        blur.draw(
+                            canvas.nativeCanvas, genericBounds, outline.path.asAndroidPath(), 0f,
+                        )
+                    }
+                    null -> blur.draw(
                         canvas.nativeCanvas,
                         0, 0, width, height,
                         cornerRadiusPx,
@@ -307,7 +320,10 @@ fun Modifier.axBlurBackground(
             }
         }
         drawContent()
-    }
+    }.axBlurRim(
+        rim = overrides.resolveRim(rim),
+        shape = shape ?: if (cornerRadius.isSpecified) RoundedCornerShape(cornerRadius) else RoundedCornerShape(50),
+    )
 }
 
 private fun Modifier.axBlurFrameTracking(enabled: Boolean, blur: AxViewBackdropBlur): Modifier =

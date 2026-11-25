@@ -7,5 +7,17 @@
         <attr name="axBackdropBlurTint" format="color" />
         <attr name="axBackdropBlurFallbackColor" format="color" />
         <attr name="axBackdropBlurInvalidateOnPreDraw" format="boolean" />
+        <attr name="axBackdropBlurRimEnabled" format="boolean" />
+        <attr name="axBackdropBlurRimColor" format="color" />
+        <attr name="axBackdropBlurRimStrength" format="float" />
+        <attr name="axBackdropBlurRimTopAlpha" format="float" />
+        <attr name="axBackdropBlurRimBottomAlpha" format="float" />
+        <attr name="axBackdropBlurRimSideAlpha" format="float" />
+        <attr name="axBackdropBlurRimEdgeWidth" format="dimension" />
+        <attr name="axBackdropBlurRimGlowDepth" format="dimension" />
+        <attr name="axBackdropBlurRimGlowAlpha" format="float" />
+        <attr name="axBackdropBlurRimCornerWidthScale" format="float" />
+        <attr name="axBackdropBlurRimCornerAlphaScale" format="float" />
+        <attr name="axBackdropBlurRimCornerTaperPower" format="float" />
     </declare-styleable>
 </resources>
